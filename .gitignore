@@ -26,6 +26,7 @@ speakers_data.pt
 # ---- Данные, проекты и аудио ----
 backup/
 data/
+data/tts_cache/
 examples/
 tmp/
 *.fb2

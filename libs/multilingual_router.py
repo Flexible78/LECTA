@@ -78,7 +78,7 @@ def gentle_trim_and_fade(audio_np, sample_rate):
     abs_audio = np.abs(audio_np)
     max_amp = np.max(abs_audio)
     if max_amp < 0.01: return np.zeros(10, dtype=np.float32)
-    threshold = 0.015
+    threshold = 0.01  # ~-40 dB
     active = np.where(abs_audio > threshold)[0]
     if len(active) == 0: return np.zeros(10, dtype=np.float32)
     pad = int(sample_rate * 0.1)
@@ -256,7 +256,11 @@ def get_edge_audio(text, voice="he-IL-AvriNeural", target_sr=24000, max_retries=
                         audio_bytes += chunk["data"]
                 return audio_bytes
 
-            audio_bytes = _run_async_safely(_synthesize, timeout=120)
+            t_edge_start = time.time()
+            audio_bytes = _run_async_safely(_synthesize, timeout=30)
+            t_edge_elapsed = time.time() - t_edge_start
+            if t_edge_elapsed > 5.0:
+                logger.warning(f"[EDGE SLOW] {t_edge_elapsed:.1f}s for: {clean_text[:80]}...")
 
             if not audio_bytes:
                 logger.warning(f"Edge TTS empty response (attempt {attempt+1})")
@@ -298,16 +302,15 @@ def process_multilingual_text(text, safe_synth_func,
     _use_en = USE_EDGE_FOR_ENGLISH if use_edge_en is None else use_edge_en
     _use_he = USE_EDGE_FOR_HEBREW if use_edge_he is None else use_edge_he
     _use_ru = USE_EDGE_FOR_RUSSIAN if use_edge_ru is None else use_edge_ru
-    _dict_mode = DICTIONARY_MODE if dict_mode is None else dict_mode
 
-    logger.debug(f"[CONFIG] Flags: EN={_use_en} HE={_use_he} RU={_use_ru} DICT={_dict_mode}")
+    logger.debug(f"[CONFIG] Flags: EN={_use_en} HE={_use_he} RU={_use_ru}")
 
     parts = auto_split_mixed_languages(text)
     if not parts:
         return None, None
 
     target_sr = 24000
-    lang_pause = 1.0 if _dict_mode else 0.4
+    lang_pause = 0.3  # единая пауза между предложениями/языковыми переходами
 
     # Phase 1: Classify edge vs local
     edge_tasks = []
@@ -349,7 +352,7 @@ def process_multilingual_text(text, safe_synth_func,
             for future in concurrent.futures.as_completed(future_to_idx):
                 idx = future_to_idx[future]
                 try:
-                    edge_results[idx] = future.result(timeout=120)
+                    edge_results[idx] = future.result(timeout=30)
                     edge_count += 1
                 except Exception as e:
                     logger.error(f"Edge task failed part {idx}: {e}")
@@ -375,13 +378,16 @@ def process_multilingual_text(text, safe_synth_func,
         for i, chunk in enumerate(chunks):
             if not re.search(r'[a-zA-Zа-яА-ЯёЁ0-9\u0590-\u05FF]', chunk):
                 continue
+            t_local_start = time.time()
             sr, aud = safe_synth_func(chunk, disable_norm=disable_n)
+            t_local_elapsed = time.time() - t_local_start
+            if t_local_elapsed > 5.0:
+                logger.warning(f"[LOCAL SLOW] {t_local_elapsed:.1f}s for: {chunk[:80]}...")
             if aud is not None:
                 aud_resampled = resample_audio(aud, sr, target_sr)
                 aud_trimmed = gentle_trim_and_fade(aud_resampled, target_sr)
                 local_parts.append(aud_trimmed)
-                if i < len(chunks) - 1:
-                    local_parts.append(create_silence(0.12, target_sr))
+                # Пауза 0 между чанками одного предложения (было 0.12s)
             else:
                 logger.warning(f"[{lang_tag}] Empty chunk {i+1}")
 
@@ -407,5 +413,11 @@ def process_multilingual_text(text, safe_synth_func,
         logger.warning("[ROUTER] No valid audio")
         return None, None
 
+    final_audio = np.concatenate(valid)
+    # Убираем тишину в самом начале итогового файла
+    abs_final = np.abs(final_audio)
+    active_start = np.where(abs_final > 0.01)[0]
+    if len(active_start) > 0:
+        final_audio = final_audio[active_start[0]:]
     logger.info(f"[ROUTER OK] Edge:{edge_count} | Local:{local_count} | Chunks:{len(valid)}")
-    return target_sr, np.concatenate(valid)
+    return target_sr, final_audio
