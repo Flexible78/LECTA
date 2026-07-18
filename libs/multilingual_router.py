@@ -9,7 +9,11 @@ import torchaudio
 import asyncio
 import concurrent.futures
 import re
+from pathlib import Path
 from pydub import AudioSegment
+
+_TTS_CACHE_DIR = Path(__file__).resolve().parent.parent / 'data' / 'tts_cache'
+_TTS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 USE_EDGE_FOR_ENGLISH = False
 USE_EDGE_FOR_HEBREW = True
@@ -173,6 +177,28 @@ _segment_cache = {}
 def _cache_key(voice, target_sr, text):
     return (voice, target_sr, hashlib.md5(text.encode('utf-8')).hexdigest())
 
+def _cache_key_str(voice, target_sr, text):
+    """Строковый ключ для дискового кэша: 'voice_sr_md5hash'"""
+    return f"{voice}_{target_sr}_{hashlib.md5(text.encode('utf-8')).hexdigest()}"
+
+def _load_from_disk_cache(key_str):
+    """Загружает numpy-массив из дискового кэша (.npy). Возвращает None если нет."""
+    cache_file = _TTS_CACHE_DIR / f"{key_str}.npy"
+    if cache_file.exists():
+        try:
+            return np.load(str(cache_file), allow_pickle=False)
+        except Exception as e:
+            logger.warning(f"[CACHE] Disk load error: {e}")
+    return None
+
+def _save_to_disk_cache(key_str, audio_np):
+    """Сохраняет numpy-массив в дисковый кэш (.npy)."""
+    try:
+        cache_file = _TTS_CACHE_DIR / f"{key_str}.npy"
+        np.save(str(cache_file), audio_np)
+    except Exception as e:
+        logger.warning(f"[CACHE] Disk save error: {e}")
+
 def clear_segment_cache():
     global _segment_cache
     _segment_cache.clear()
@@ -200,9 +226,19 @@ def get_edge_audio(text, voice="he-IL-AvriNeural", target_sr=24000, max_retries=
         return create_silence(0.5, target_sr)
 
     ck = _cache_key(voice, target_sr, clean_text)
+    ck_str = _cache_key_str(voice, target_sr, clean_text)
+
+    # Проверка 1: память
     if ck in _segment_cache:
-        logger.info(f"[CACHE HIT] {clean_text[:30]}...")
+        logger.info(f"[CACHE HIT] memory: {clean_text[:30]}...")
         return _segment_cache[ck].copy()
+
+    # Проверка 2: диск (.npy)
+    disk_audio = _load_from_disk_cache(ck_str)
+    if disk_audio is not None:
+        _segment_cache[ck] = disk_audio.copy()
+        logger.info(f"[CACHE HIT] disk: {clean_text[:30]}...")
+        return disk_audio.copy()
 
     last_error = None
     for attempt in range(max_retries):
@@ -243,6 +279,7 @@ def get_edge_audio(text, voice="he-IL-AvriNeural", target_sr=24000, max_retries=
 
             audio_np = gentle_trim_and_fade(audio_np, target_sr)
             _segment_cache[ck] = audio_np.copy()
+            _save_to_disk_cache(ck_str, audio_np)
             logger.info(f"[CLOUD OK] {len(audio_np)/target_sr:.1f}s audio")
             return audio_np
 
