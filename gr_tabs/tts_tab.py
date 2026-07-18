@@ -1167,11 +1167,7 @@ def tts_tab(ab_path, tts_state):
             type="array",
             wrap=True,
         )
-        audio_player = gr.Audio(
-            interactive=False,
-            label="🎧 Плеер",
-            show_download_button=True,
-        )
+        audio_player = gr.Audio(label="Плеер", type="filepath", interactive=False)
 
         # ── Панель управления файлами (объединены логически) ──
         with gr.Group():
