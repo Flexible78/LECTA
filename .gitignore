@@ -1,0 +1,63 @@
+@'
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# ---- Портативные бинарники (не для git) ----
+/python/
+/git/
+/ffmpeg/
+/pip/
+
+# ---- ML-модели (большие, качаются отдельно) ----
+models/
+*.pt
+*.pth
+*.onnx
+*.bin
+*.gguf
+*.safetensors
+speakers_data.pt
+
+# ---- Данные, проекты и аудио ----
+backup/
+data/
+examples/
+tmp/
+*.fb2
+*.mp3
+*.wav
+*.ogg
+*.flac
+*.m4a
+
+# ---- Логи и локальное состояние ----
+*.log
+tts.db
+*.sqlite
+*.sqlite3
+tts_ui_settings.json
+
+# ---- СЕКРЕТЫ (никогда в git!) ----
+.env
+.env.*
+*secret*
+*token*
+thought_sigs.json
+credentials.json
+client_secret*.json
+*.pem
+*.key
+
+# ---- IDE / OS ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+nul
+repomix-output.*
+'@ | Set-Content -Encoding UTF8 .gitignore

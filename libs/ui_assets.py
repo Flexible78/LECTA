@@ -1,0 +1,214 @@
+# libs/ui_assets.py — CSS, JavaScript и HTML-генераторы прогресс-баров
+
+custom_css = """
+.progress-level { background-color: #1a1a1a !important; border-radius: 4px !important; }
+.progress-level > div[style*="width"], .progress-bar {
+    background-color: #FF8C00 !important; 
+    background-image: linear-gradient(45deg, rgba(255, 255, 255, 0.15) 25%, transparent 25%, transparent 50%, rgba(255, 255, 255, 0.15) 50%, rgba(255, 255, 255, 0.15) 75%, transparent 75%, transparent) !important;
+    background-size: 1rem 1rem !important;
+    animation: progress-stripes 1s linear infinite !important;
+}
+@keyframes progress-stripes { from { background-position: 1rem 0; } to { background-position: 0 0; } }
+.progress-text, .eta-text, .progress-info { color: #87CEEB !important; font-weight: bold !important; text-shadow: 1px 1px 2px #000000 !important; opacity: 1 !important; display: inline-block !important; }
+.meta-text, .eta-level { text-align: right !important; display: block !important; width: 100% !important; }
+"""
+
+custom_head = """
+<script>
+document.addEventListener('keydown', function(e) {
+    if (e.ctrlKey && e.key === 'Enter') {
+        const btns = ['#tts_btn', '#fb2_gen_btn', '#parse_btn', '#demo_tts_btn'];
+        for (let id of btns) {
+            let el = document.querySelector(id);
+            if (el && el.offsetParent !== null) {
+                let b = el.tagName.toLowerCase() === 'button' ? el : el.querySelector('button');
+                if (b) { b.click(); break; } 
+            }
+        }
+    }
+    if (e.ctrlKey && (e.key === 's' || e.key === 'S' || e.key === 'ы' || e.key === 'Ы')) {
+        e.preventDefault(); 
+        let el = document.querySelector('#save_xml_btn');
+        if (el && el.offsetParent !== null) {
+            let b = el.tagName.toLowerCase() === 'button' ? el : el.querySelector('button');
+            if (b) b.click();
+        }
+    }
+    if (e.key === 'Escape') {
+        let btns = document.querySelectorAll('button');
+        for (let b of btns) {
+            if (b.innerText.includes('Прервать') && b.offsetParent !== null) { b.click(); }
+        }
+    }
+    if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey) {
+        let activeTag = document.activeElement.tagName.toLowerCase();
+        if (activeTag === 'input') {
+            let btns = document.querySelectorAll('button');
+            for (let b of btns) {
+                if (b.textContent.includes('Переименовать') && b.offsetParent !== null) {
+                    b.click();
+                    e.preventDefault();
+                    e.stopPropagation();
+                    return;
+                }
+            }
+        }
+    }
+});
+</script>
+"""
+
+
+# ═══ TIME FORMATTERS ═══
+
+def format_time_hms(seconds):
+    m, s = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    if h > 0: return f"{h:02d}:{m:02d}:{s:02d}"
+    return f"{m:02d}:{s:02d}"
+
+def format_audio_time(seconds):
+    m = int(seconds // 60)
+    s = int(seconds % 60)
+    return f"{m} m. {s} s."
+
+
+# ═══ HTML PROGRESS BAR GENERATORS ═══
+
+def get_upload_progress_html(pct, current, total, label):
+    """Прогресс-бар для авто-парсинга в зоне загрузки файлов (app.py)"""
+    return f"""<div style="background:#1e293b;padding:12px;border-radius:8px;border:1px solid #334155;margin-top:8px;">
+        <div style="display:flex;justify-content:space-between;margin-bottom:4px;color:#f8fafc;font-size:14px;">
+            <span>🔄 Авто-парсинг: {label}</span><span style="color:#f97316;">{pct}%</span>
+        </div>
+        <div style="width:100%;background:#0f172a;border-radius:8px;overflow:hidden;height:16px;box-shadow:inset 0 2px 4px rgba(0,0,0,0.5);">
+            <div style="width:{pct}%;height:100%;background:linear-gradient(90deg,#ea580c,#f97316);transition:width 0.3s ease;"></div>
+        </div>
+        <div style="color:#94a3b8;font-size:12px;margin-top:4px;">Проект {current} из {total}</div>
+    </div>"""
+
+def get_metrics_html(percent, elapsed, remaining, speed):
+    """Прогресс-бар для одиночной озвучки (tts_tab.py)"""
+    return f"""
+    <div style="background: #1e293b; padding: 15px; border-radius: 8px; border: 1px solid #334155; margin-bottom: 10px;">
+        <div style="display: flex; justify-content: space-between; margin-bottom: 5px; font-weight: bold; font-size: 18px; color: #f8fafc;">
+            <span>Прогресс озвучки</span><span style="color: #f97316;">{percent}%</span>
+        </div>
+        <div style="width: 100%; background-color: #0f172a; border-radius: 10px; overflow: hidden; height: 28px; box-shadow: inset 0 2px 4px rgba(0,0,0,0.5);">
+            <div style="width: {percent}%; height: 100%; background: linear-gradient(90deg, #ea580c, #f97316); transition: width 0.3s ease;"></div>
+        </div>
+        <div style="display: flex; justify-content: space-between; margin-top: 10px; color: #94a3b8; font-family: monospace; font-size: 15px;">
+            <span>⏱ Прошло: <span style="color:#38bdf8">{elapsed}</span></span>
+            <span>⏳ Осталось: <span style="color:#f43f5e">{remaining}</span></span>
+            <span>⚡ Скорость: <span style="color:#10b981">{speed}</span></span>
+        </div>
+    </div>
+    """
+
+def get_batch_metrics_html(project_name, project_pct, project_idx, total_projects, 
+                           batch_pct, elapsed, remaining, speed):
+    """Двухуровневый прогресс-бар для пакетной озвучки (tts_tab.py)"""
+    return f"""
+    <div style="background: #1e293b; padding: 15px; border-radius: 8px; border: 1px solid #334155; margin-bottom: 10px;">
+        <div style="display: flex; justify-content: space-between; margin-bottom: 3px; font-weight: bold; font-size: 14px; color: #94a3b8;">
+            <span>📦 Пакетная озвучка: проект {project_idx} из {total_projects}</span>
+            <span style="color: #c084fc;">{batch_pct}%</span>
+        </div>
+        <div style="width: 100%; background-color: #0f172a; border-radius: 8px; overflow: hidden; height: 12px; box-shadow: inset 0 2px 4px rgba(0,0,0,0.5); margin-bottom: 14px;">
+            <div style="width: {batch_pct}%; height: 100%; background: linear-gradient(90deg, #7c3aed, #a78bfa); transition: width 0.3s ease;"></div>
+        </div>
+        
+        <div style="display: flex; justify-content: space-between; margin-bottom: 3px; font-weight: bold; font-size: 14px; color: #f8fafc;">
+            <span>📁 {project_name}</span>
+            <span style="color: #f97316;">{project_pct}%</span>
+        </div>
+        <div style="width: 100%; background-color: #0f172a; border-radius: 8px; overflow: hidden; height: 18px; box-shadow: inset 0 2px 4px rgba(0,0,0,0.5); margin-bottom: 10px;">
+            <div style="width: {project_pct}%; height: 100%; background: linear-gradient(90deg, #ea580c, #f97316); transition: width 0.3s ease;"></div>
+        </div>
+        
+        <div style="display: flex; justify-content: space-between; margin-top: 8px; color: #94a3b8; font-family: monospace; font-size: 13px;">
+            <span>⏱ Прошло: <span style="color:#38bdf8">{elapsed}</span></span>
+            <span>⏳ Осталось: <span style="color:#f43f5e">{remaining}</span></span>
+            <span>⚡ Скорость: <span style="color:#10b981">{speed}</span></span>
+        </div>
+    </div>
+    """
+
+def get_batch_summary_html(stats):
+    """Сводная таблица после пакетной озвучки (tts_tab.py)"""
+    if not stats:
+        return ""
+    
+    total_dur = sum(s[1] for s in stats)
+    total_size = sum(s[2] for s in stats)
+    total_proc = sum(s[3] for s in stats)
+    
+    rows_html = ""
+    for i, (name, dur, size, proc) in enumerate(stats, 1):
+        rows_html += f"""
+        <tr>
+            <td style="padding:6px 12px; border-bottom:1px solid #334155;">{i}</td>
+            <td style="padding:6px 12px; border-bottom:1px solid #334155; font-weight:bold; color:#f1f5f9;">{name}</td>
+            <td style="padding:6px 12px; border-bottom:1px solid #334155; color:#38bdf8;">{format_audio_time(dur)}</td>
+            <td style="padding:6px 12px; border-bottom:1px solid #334155; color:#f97316;">{format_audio_time(proc)}</td>
+            <td style="padding:6px 12px; border-bottom:1px solid #334155; color:#10b981;">{size:.1f} MB</td>
+        </tr>"""
+    
+    return f"""
+    <div style="background: #1e293b; padding: 18px; border-radius: 8px; border: 1px solid #334155; margin-bottom: 10px;">
+        <div style="font-weight: bold; font-size: 18px; color: #f8fafc; margin-bottom: 12px;">
+            📊 Сводка пакетной озвучки
+        </div>
+        <table style="width:100%; border-collapse:collapse; font-size:14px;">
+            <thead>
+                <tr style="color:#94a3b8; text-align:left; border-bottom:2px solid #475569;">
+                    <th style="padding:6px 12px;">#</th>
+                    <th style="padding:6px 12px;">Проект</th>
+                    <th style="padding:6px 12px;">🎧 Длительность</th>
+                    <th style="padding:6px 12px;">⏱ Обработка</th>
+                    <th style="padding:6px 12px;">💾 Размер</th>
+                </tr>
+            </thead>
+            <tbody>
+                {rows_html}
+                <tr style="font-weight:bold; border-top:2px solid #475569;">
+                    <td style="padding:8px 12px;" colspan="2">📦 ИТОГО ({len(stats)} проектов)</td>
+                    <td style="padding:8px 12px; color:#38bdf8;">{format_audio_time(total_dur)}</td>
+                    <td style="padding:8px 12px; color:#f97316;">{format_audio_time(total_proc)}</td>
+                    <td style="padding:8px 12px; color:#10b981;">{total_size:.1f} MB</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+    """
+
+def get_parse_metrics_html(percent, action="Ожидание..."):
+    """Прогресс-бар для парсинга FB2 (parse_tab.py)"""
+    return f"""
+    <div style="background: #1e293b; padding: 15px; border-radius: 8px; border: 1px solid #334155; margin-bottom: 10px;">
+        <div style="display: flex; justify-content: space-between; margin-bottom: 5px; font-weight: bold; font-size: 16px; color: #f8fafc;">
+            <span>Статус: {action}</span><span style="color: #f97316;">{percent}%</span>
+        </div>
+        <div style="width: 100%; background-color: #0f172a; border-radius: 10px; overflow: hidden; height: 20px; box-shadow: inset 0 2px 4px rgba(0,0,0,0.5);">
+            <div style="width: {percent}%; height: 100%; background: linear-gradient(90deg, #ea580c, #f97316); transition: width 0.3s ease;"></div>
+        </div>
+    </div>
+    """
+
+def get_vocab_metrics_html(percent, elapsed, remaining, speed, action="Ожидание..."):
+    """Прогресс-бар для парсера словаря (vocab_tab.py)"""
+    return f"""
+    <div style="background: #1e293b; padding: 15px; border-radius: 8px; border: 1px solid #334155; margin-bottom: 10px;">
+        <div style="display: flex; justify-content: space-between; margin-bottom: 5px; font-weight: bold; font-size: 16px; color: #f8fafc;">
+            <span>Статус: {action}</span><span style="color: #f97316;">{percent}%</span>
+        </div>
+        <div style="width: 100%; background-color: #0f172a; border-radius: 10px; overflow: hidden; height: 20px; box-shadow: inset 0 2px 4px rgba(0,0,0,0.5);">
+            <div style="width: {percent}%; height: 100%; background: linear-gradient(90deg, #ea580c, #f97316); transition: width 0.3s ease;"></div>
+        </div>
+        <div style="display: flex; justify-content: space-between; margin-top: 10px; color: #94a3b8; font-family: monospace; font-size: 14px;">
+            <span>⏱ Прошло: <span style="color:#38bdf8">{elapsed}</span></span>
+            <span>⏳ Осталось: <span style="color:#f43f5e">{remaining}</span></span>
+            <span>⚡ Скорость: <span style="color:#10b981">{speed}</span></span>
+        </div>
+    </div>
+    """
