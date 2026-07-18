@@ -527,12 +527,14 @@ def tts(
 
         # Запоминаем модель, использованную для этого файла (читаем synth.ver непосредственно перед сохранением)
         model_short = get_model_short_name(synth.ver) if synth.ver else "Модель?"
-        _save_model_map_entry(ab_path, short_final, model_short)
+        # При прерывании файл сохраняется с суффиксом _PARTIAL — сохраняем метаданные под его реальным именем
+        saved_stem = partial_mp3_file.stem if was_interrupted else mp3_file.stem
+        _save_model_map_entry(ab_path, saved_stem, model_short)
 
         last_final_mp3_path = str(mp3_file)
 
         elapsed_file = time.time() - file_start_time
-        parse_times[str(short_final)] = elapsed_file
+        parse_times[str(saved_stem)] = elapsed_file
         with open(times_file, "w", encoding="utf-8") as f:
             json.dump(parse_times, f)
 
@@ -617,6 +619,9 @@ def get_files_list(ab_name):
             ptime_str = format_audio_time(elapsed) if elapsed > 0 else "Н/Д"
             # Короткое имя модели (из карты) или '?'
             model_label = model_map.get(file_key, "?")
+            # Частичные файлы помечаем в колонке обработки
+            if "_PARTIAL" in file_path.name:
+                ptime_str = "прервано"
             rows.append(
                 [
                     file_path.name,
