@@ -1087,7 +1087,7 @@ def batch_tts_all_projects(
     )
 
 
-def _play_completion_sound(final_mp3_path):
+def _play_completion_sound():
     """Проигрывает звук завершения в скрытом HTML-элементе, только если синтез завершился успешно."""
     sound_html = ""
     if _synthesis_completed:
@@ -1298,7 +1298,6 @@ def tts_tab(ab_path, tts_state):
         outputs=[df_output, output_log, metrics_panel, audio_player],
     ).then(
         fn=_play_completion_sound,
-        inputs=audio_player,
         outputs=completion_sound_html,
     )
 
@@ -1339,7 +1338,6 @@ def tts_tab(ab_path, tts_state):
         outputs=[df_output, output_log, metrics_panel, audio_player],
     ).then(
         fn=_play_completion_sound,
-        inputs=audio_player,
         outputs=completion_sound_html,
     )
 
