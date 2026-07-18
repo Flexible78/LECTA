@@ -40,6 +40,7 @@ class AppConfig:
     use_edge_russian: bool = False
     use_edge_hebrew: bool = True
     dict_mode: bool = False
+    completion_sound: str = "complete.wav"
 
     @staticmethod
     def parse_args():

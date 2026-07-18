@@ -149,6 +149,7 @@ def sound_event_action(ev_name, evt: gr.EventData, se_path=''):
         gr.Info(f"Удалено событие: {ev_name}", duration=4)
     return gr.update(value=sql_db.select('list_of_snd', {'pattern': False, 'sound_type': False}))
 
+
 def handle_audio_upload(full_path, evt: gr.EventData):
     target = evt.target
     if full_path is None:
@@ -158,6 +159,21 @@ def handle_audio_upload(full_path, evt: gr.EventData):
     if f_path.suffix != '.wav':
         return None
     return f_path.stem
+
+
+def _events_sound_choices():
+    """Возвращает отсортированный список .wav файлов из sound/events/."""
+    if ev_path.exists():
+        return sorted([x.name for x in ev_path.iterdir() if x.suffix == ".wav"])
+    return ["complete.wav"]
+
+
+def _save_completion_sound(filename):
+    """Сохраняет выбранный звук завершения в user_settings."""
+    if filename:
+        AppConfig.save_user_settings({"completion_sound": filename})
+        gr.Info(f"Звук завершения: {filename}")
+
 
 def settings_tab(tts_state):
     tab_index = gr.State(value=0)
@@ -381,6 +397,25 @@ def settings_tab(tts_state):
                 save_paths,
                 inputs=[data_path_box, models_path_box],
                 outputs=[data_path_box, models_path_box]
+            )
+
+        with gr.Tab("🔔 Звук завершения", id=45):
+            with gr.Row():
+                completion_sound_sel = gr.Dropdown(
+                    value=config.completion_sound,
+                    label="Выберите звук для оповещения о завершении синтеза",
+                    choices=_events_sound_choices(),
+                    interactive=True,
+                )
+
+            completion_sound_sel.change(
+                fn=_save_completion_sound,
+                inputs=completion_sound_sel,
+            )
+            # Обновляем список при открытии вкладки
+            s_tabs.select(
+                fn=lambda: _events_sound_choices(),
+                outputs=completion_sound_sel,
             )
 
         s_tabs.select(
