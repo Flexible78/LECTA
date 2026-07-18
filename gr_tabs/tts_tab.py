@@ -214,6 +214,7 @@ def tts(
     global stop_text_to_sp, _synthesis_completed
     stop_text_to_sp = False
     _synthesis_completed = False
+    last_final_mp3_path = ""
 
     files = [x.stem for x in xml_path.glob("*.xml")]
 
@@ -263,6 +264,7 @@ def tts(
         cached_files_list,
         "⏳ Инициализация движка...",
         get_metrics_html(0, "00:00", "Оценка...", "0.0"),
+        gr.update(),
     )
 
     # ── Общий safe_synth (используется flush_text_buffer и cite/empty-line обработкой) ──
@@ -323,6 +325,7 @@ def tts(
                     "00:00",
                     "-",
                 ),
+                gr.update(),
             )
             continue
 
@@ -389,7 +392,7 @@ def tts(
                 log_txt = f"▶ В работе: {file}.xml\n🎙 Озвучка строки: {current_line} из {total_lines}..."
                 # НЕ вызываем get_files_list каждые 3 строки — это запускает ffprobe на всех MP3!
                 # Возвращаем кэшированный список вместо [] чтобы таблица не мигала.
-                yield cached_files_list, log_txt, html
+                yield cached_files_list, log_txt, html, gr.update()
 
             # --- ЛОГИКА ГЕНЕРАЦИИ ЗВУКА (с буферизацией для Edge TTS) ---
             audio = AudioSegment.empty()
@@ -526,6 +529,8 @@ def tts(
         model_short = get_model_short_name(synth.ver) if synth.ver else "Модель?"
         _save_model_map_entry(ab_path, short_final, model_short)
 
+        last_final_mp3_path = str(mp3_file)
+
         elapsed_file = time.time() - file_start_time
         parse_times[str(short_final)] = elapsed_file
         with open(times_file, "w", encoding="utf-8") as f:
@@ -542,6 +547,7 @@ def tts(
                     "-",
                     "Остановлено",
                 ),
+                gr.update(value=last_final_mp3_path) if last_final_mp3_path else gr.update(),
             )
             return  # Выходим из функции полностью, чтобы не начинать следующий файл
 
@@ -560,6 +566,7 @@ def tts(
                 ),
                 "-",
             ),
+            gr.update(value=last_final_mp3_path),
         )
 
     # ФИНАЛ
@@ -571,6 +578,7 @@ def tts(
         get_metrics_html(
             100, format_time_hms(time.time() - global_start_time), "00:00", "-"
         ),
+        gr.update(value=last_final_mp3_path),
     )
 
 
@@ -769,6 +777,7 @@ def batch_tts_all_projects(
             [],
             "⚠️ Нет проектов для пакетной озвучки!",
             get_batch_metrics_html("", 0, 0, 0, 0, "00:00", "00:00", "0.0"),
+            gr.update(),
         )
         return
 
@@ -799,7 +808,10 @@ def batch_tts_all_projects(
         [],
         f"📦 Подготовка {total} проектов...",
         get_batch_metrics_html("Подготовка...", 0, 0, total, 0, "00:00", "...", "..."),
+        gr.update(),
     )
+
+    last_final_mp3_path = ""
 
     for idx, project in enumerate(all_projects, 1):
         if stop_text_to_sp:
@@ -825,6 +837,7 @@ def batch_tts_all_projects(
                 all_files,
                 f"🛑 Остановлено! Озвучено {processed_count} из {total}",
                 partial_html,
+                gr.update(value=last_final_mp3_path) if last_final_mp3_path else gr.update(),
             )
             return
 
@@ -855,6 +868,7 @@ def batch_tts_all_projects(
                     format_time_hms(rem),
                     f"~{format_time_hms(sec_per_proj)}/пр",
                 ),
+                gr.update(),
             )
             try:
                 # Используем сохранённые настройки парсинга из конфигурации
@@ -933,6 +947,7 @@ def batch_tts_all_projects(
                         "...",
                         "...",
                     ),
+                    gr.update(),
                 )
                 continue
 
@@ -951,7 +966,7 @@ def batch_tts_all_projects(
         ):
             if stop_text_to_sp:
                 break
-            files_list, log_msg, tts_html = tts_result
+            files_list, log_msg, tts_html, _ = tts_result
 
             # Извлекаем процент текущего проекта из HTML tts()
             project_pct = parse_percent_from_html(tts_html)
@@ -984,7 +999,7 @@ def batch_tts_all_projects(
             )
             # НАКАПЛИВАЕМ: текущие файлы проекта + все предыдущие
             combined_display = all_files + files_list
-            yield combined_display, f"[{idx}/{total}] {project}: {log_msg}", batch_html
+            yield combined_display, f"[{idx}/{total}] {project}: {log_msg}", batch_html, gr.update()
 
         # Собираем статистику по завершённому проекту
         dur, size_mb, proc_time = get_project_stats(project)
@@ -1001,6 +1016,10 @@ def batch_tts_all_projects(
         # НАКАПЛИВАЕМ: добавляем MP3 завершённого проекта в общий список
         project_files = get_files_list(project)
         all_files.extend(project_files)
+        if project_files:
+            last_file_name = project_files[-1][0]
+            if "_PARTIAL" not in last_file_name:
+                last_final_mp3_path = str(data_path / project / "mp3" / last_file_name)
 
     elapsed = time.time() - global_start
     speed_final = processed_count / elapsed if elapsed > 0 else 0
@@ -1026,15 +1045,22 @@ def batch_tts_all_projects(
         all_files,
         f"🎉 ГОТОВО! Озвучено {processed_count} из {total} проектов",
         final_html,
+        gr.update(value=last_final_mp3_path),
     )
 
 
-def _play_completion_sound():
-    """Проигрывает звук завершения, только если синтез завершился успешно."""
+def _play_completion_sound(final_mp3_path):
+    """Проигрывает звук завершения в скрытом HTML-элементе, только если синтез завершился успешно."""
+    sound_html = ""
     if _synthesis_completed:
         cfg = AppConfig.load_user_settings()
-        return str(sound_dir / "events" / cfg.completion_sound)
-    return gr.update()
+        complete_path = sound_dir / "events" / cfg.completion_sound
+        try:
+            src = complete_path.relative_to(now_dir).as_posix()
+        except ValueError:
+            src = str(complete_path)
+        sound_html = f'<audio autoplay src="file/{src}"></audio>'
+    return gr.update(value=sound_html)
 
 
 def change_tts_model(mver):
@@ -1167,7 +1193,8 @@ def tts_tab(ab_path, tts_state):
             type="array",
             wrap=True,
         )
-        audio_player = gr.Audio(label="Плеер", type="filepath", interactive=False)
+        audio_player = gr.Audio(label="Плеер", type="filepath", interactive=False, autoplay=True)
+        completion_sound_html = gr.HTML(visible=False)
 
         # ── Панель управления файлами (объединены логически) ──
         with gr.Group():
@@ -1230,10 +1257,11 @@ def tts_tab(ab_path, tts_state):
             use_sound_effect,
             use_accents,
         ],
-        outputs=[df_output, output_log, metrics_panel],
+        outputs=[df_output, output_log, metrics_panel, audio_player],
     ).then(
         fn=_play_completion_sound,
-        outputs=audio_player,
+        inputs=audio_player,
+        outputs=completion_sound_html,
     )
 
     def select_all_projects():
@@ -1270,10 +1298,11 @@ def tts_tab(ab_path, tts_state):
             repl,
             batch_project_sel,
         ],
-        outputs=[df_output, output_log, metrics_panel],
+        outputs=[df_output, output_log, metrics_panel, audio_player],
     ).then(
         fn=_play_completion_sound,
-        outputs=audio_player,
+        inputs=audio_player,
+        outputs=completion_sound_html,
     )
 
     stop_btn.click(stop_tts, outputs=output_log, queue=False)
