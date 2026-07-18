@@ -31,6 +31,7 @@ from pydub.utils import mediainfo
 sound_dir = now_dir / "sound"
 stop_text_to_sp = False
 _synthesis_completed = False
+_completion_sound = "complete.wav"
 txt_parser = TextParse(False)
 
 # ═══ КАРТА МОДЕЛЕЙ ДЛЯ ОТСЛЕЖИВАНИЯ ═══
@@ -648,6 +649,22 @@ def snd_list():
     return gr.update(value="", choices=[])
 
 
+def events_sound_list():
+    """Возвращает список звуков из sound/events/ для выпадающего списка."""
+    ev_path = sound_dir / "events"
+    if ev_path.exists():
+        files = sorted([x.name for x in ev_path.iterdir() if x.suffix == ".wav"])
+        return gr.update(choices=files)
+    return gr.update(choices=[])
+
+
+def set_completion_sound(filename):
+    """Запоминает выбранный звук завершения."""
+    global _completion_sound
+    if filename:
+        _completion_sound = filename
+
+
 def del_file(filename, ab_name):
     if not filename:
         return get_files_list(ab_name)
@@ -1032,7 +1049,7 @@ def batch_tts_all_projects(
 def _play_completion_sound():
     """Проигрывает звук завершения, только если синтез завершился успешно."""
     if _synthesis_completed:
-        return str(sound_dir / "events" / "complete.wav")
+        return str(sound_dir / "events" / _completion_sound)
     return gr.update()
 
 
@@ -1116,6 +1133,13 @@ def tts_tab(ab_path, tts_state):
                         label="Проставить ударения (РУ)", value=True
                     )
             with gr.Column(scale=1, min_width=150):
+                completion_sound_sel = gr.Dropdown(
+                    value="complete.wav",
+                    label="🔔 Звук завершения",
+                    choices=["complete.wav"],
+                    interactive=True,
+                    scale=1,
+                )
                 tts_button = gr.Button(
                     "🟢 TTS (Ctrl+Enter)",
                     elem_id="tts_btn",
@@ -1283,5 +1307,11 @@ def tts_tab(ab_path, tts_state):
     del_btn.click(del_file, inputs=[cur_file, ab_path], outputs=[df_output]).then(
         fn=lambda: gr.update(visible=False), outputs=[rename_panel]
     )
-    tts_tab_ui.select(fn=get_files_list, inputs=ab_path, outputs=df_output)
+    tts_tab_ui.select(fn=get_files_list, inputs=ab_path, outputs=df_output).then(
+        events_sound_list, outputs=completion_sound_sel
+    )
     tts_state.change(change_tts_model, inputs=tts_state, outputs=spk_sel)
+    completion_sound_sel.change(
+        fn=set_completion_sound,
+        inputs=completion_sound_sel,
+    )
