@@ -189,11 +189,43 @@ def tts(
     noise_lvl,
     use_sound_effect,
     use_accents,
+    auto_parse=True,
 ):
     work_dir = data_path / ab_path
     xml_path = work_dir / "xml"
     mp3_path = work_dir / "mp3"
     mp3_path.mkdir(parents=True, exist_ok=True)
+
+    # Авто-парсинг: если XML отсутствует или исходник новее — парсим автоматически
+    if auto_parse:
+        fb2_file = work_dir / f"{ab_path}.fb2"
+        need_parse = False
+        if not xml_path.exists() or not list(xml_path.glob("*.xml")):
+            need_parse = True
+        elif fb2_file.exists():
+            fb2_mtime = fb2_file.stat().st_mtime
+            xml_files = list(xml_path.glob("*.xml"))
+            if not xml_files or fb2_mtime > max(f.stat().st_mtime for f in xml_files):
+                need_parse = True
+        if need_parse and fb2_file.exists():
+            try:
+                fresh_config = AppConfig.load_user_settings()
+                parse_ch_size = getattr(fresh_config, "ch_size", 200)
+                parse_punctuation = getattr(fresh_config, "punctuation", False)
+                parse_translit = getattr(fresh_config, "translit", True)
+                parse_sound_effect = getattr(fresh_config, "sound_effect", False)
+                proc = FB2Processor()
+                for _ in proc.process_book(
+                    ab_path=ab_path,
+                    replace=repl,
+                    sound_effect=parse_sound_effect,
+                    punctuation=parse_punctuation,
+                    translit=parse_translit,
+                    ch_size=parse_ch_size,
+                ):
+                    pass
+            except Exception as e:
+                print(f"Auto-parse error: {e}")
 
     try:
         Path("tmp/.config/TTS-Server").mkdir(parents=True, exist_ok=True)
@@ -858,8 +890,8 @@ def batch_tts_all_projects(
             batch_pre_pct = int((idx - 1) / total * 100)
             elapsed = time.time() - global_start
             speed = idx / elapsed if elapsed > 0 else 0
-            rem = (total - idx) / speed if speed > 0 else 0
-            sec_per_proj = 1 / speed if speed > 0 else 0
+            rem = max(0, (total - idx) / speed) if speed > 0 else 0
+            sec_per_proj = max(0, 1 / speed) if speed > 0 else 0
             yield (
                 all_files,
                 f"📁 [{idx}/{total}] {project}: Парсинг FB2 → XML...",
@@ -968,6 +1000,7 @@ def batch_tts_all_projects(
             noise_lvl,
             use_sound_effect,
             use_accents,
+            auto_parse=False,
         ):
             if stop_text_to_sp:
                 break
@@ -983,13 +1016,13 @@ def batch_tts_all_projects(
             # Оценка оставшегося времени: пропорционально оставшимся проектам
             projects_done = (idx - 1) + project_pct / 100
             speed_proj = projects_done / elapsed if elapsed > 0 else 0
-            rem_sec = (total - projects_done) / speed_proj if speed_proj > 0 else 0
+            rem_sec = max(0, (total - projects_done) / speed_proj) if speed_proj > 0 else 0
 
             # Формат скорости: если проектов в секунду < 0.01, показываем мин/проект
             if speed_proj > 0.01:
                 speed_str = f"{speed_proj:.2f} пр/с"
             else:
-                sec_per_proj = 1 / speed_proj if speed_proj > 0 else 0
+                sec_per_proj = max(0, 1 / speed_proj) if speed_proj > 0 else 0
                 speed_str = f"~{format_time_hms(sec_per_proj)}/пр"
 
             batch_html = get_batch_metrics_html(
@@ -1028,7 +1061,7 @@ def batch_tts_all_projects(
 
     elapsed = time.time() - global_start
     speed_final = processed_count / elapsed if elapsed > 0 else 0
-    sec_per_proj_final = 1 / speed_final if speed_final > 0 else 0
+    sec_per_proj_final = max(0, 1 / speed_final) if speed_final > 0 else 0
 
     # Финальный HTML: двойной бар + сводная таблица
     final_bars = get_batch_metrics_html(
