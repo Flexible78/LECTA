@@ -1731,6 +1731,10 @@ def tts_tab(ab_path, tts_state):
     ).then(
         fn=_play_completion_sound,
         outputs=completion_sound_html,
+    ).then(
+        fn=get_file_checkbox_choices,
+        inputs=[ab_path, df_output],
+        outputs=[file_checkboxes],
     )
 
     def select_all_projects():
@@ -1771,6 +1775,10 @@ def tts_tab(ab_path, tts_state):
     ).then(
         fn=_play_completion_sound,
         outputs=completion_sound_html,
+    ).then(
+        fn=get_file_checkbox_choices,
+        inputs=[ab_path, df_output],
+        outputs=[file_checkboxes],
     )
 
     stop_btn.click(stop_tts, outputs=output_log, queue=False)
