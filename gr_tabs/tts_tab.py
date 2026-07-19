@@ -667,18 +667,86 @@ def get_files_list(ab_name):
 
 
 def create_zip_archive(ab_path):
+    """Сканирует папку mp3 проекта на диске и упаковывает ВСЕ *.mp3 (включая _PARTIAL) в zip."""
     mp3_dir = data_path / ab_path / "mp3"
     if not mp3_dir.exists():
         raise gr.Error(f"Папка с файлами не найдена!")
 
+    # ⚠️ Предупреждение: синтез не завершён — архив может быть неполным
+    if not _synthesis_completed:
+        gr.Warning("⚠️ Синтез ещё не завершён! Архив может быть неполным.")
+
+    # Сканируем ВСЕ *.mp3 на диске (а не из таблицы/памяти)
+    mp3_files = sorted(mp3_dir.glob("*.mp3"))
+    if not mp3_files:
+        raise gr.Error("В папке нет MP3-файлов!")
+
     with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
         zip_filename = tmp.name
     try:
+        added = 0
+        seen_names = {}
         with zipfile.ZipFile(zip_filename, "w", zipfile.ZIP_DEFLATED) as zipf:
-            for file_path in mp3_dir.rglob("*"):
-                if file_path.is_file():
-                    arcname = f"{ab_path}/{file_path.relative_to(mp3_dir.parent)}"
-                    zipf.write(str(file_path), str(arcname))
+            for file_path in mp3_files:
+                arcname = file_path.name
+                # Дедуп: если имя уже встречалось — добавляем индекс, НЕ пропускаем
+                if arcname in seen_names:
+                    seen_names[arcname] += 1
+                    stem, ext = file_path.stem, file_path.suffix
+                    arcname = f"{stem}_{seen_names[arcname]}{ext}"
+                else:
+                    seen_names[arcname] = 1
+                zipf.write(str(file_path), arcname)
+                added += 1
+
+        total_found = len(mp3_files)
+        print(f"В архив добавлено {added} файлов из {total_found} найденных")
+        if added != total_found:
+            gr.Warning(f"⚠️ Расхождение: {added} в архиве vs {total_found} на диске!")
+
+        return gr.update(visible=True, value=zip_filename)
+    except Exception as e:
+        if Path(zip_filename).exists():
+            Path(zip_filename).unlink()
+        raise gr.Error(f"Ошибка: {str(e)}")
+
+
+def create_selected_zip_archive(ab_path, selected_filenames):
+    """Сканирует папку mp3 на диске и упаковывает ТОЛЬКО выбранные файлы в zip.
+    (Подготовлено для Фикса B — чекбоксы строк таблицы.)"""
+    mp3_dir = data_path / ab_path / "mp3"
+    if not mp3_dir.exists():
+        raise gr.Error(f"Папка с файлами не найдена!")
+
+    # ⚠️ Предупреждение: синтез не завершён — архив может быть неполным
+    if not _synthesis_completed:
+        gr.Warning("⚠️ Синтез ещё не завершён! Архив может быть неполным.")
+
+    if not selected_filenames:
+        raise gr.Error("Не выбрано ни одного файла!")
+
+    with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
+        zip_filename = tmp.name
+    try:
+        added = 0
+        seen_names = {}
+        with zipfile.ZipFile(zip_filename, "w", zipfile.ZIP_DEFLATED) as zipf:
+            for fname in selected_filenames:
+                file_path = mp3_dir / fname
+                if not file_path.exists():
+                    gr.Warning(f"Файл не найден на диске: {fname} — пропущен")
+                    continue
+                arcname = fname
+                if arcname in seen_names:
+                    seen_names[arcname] += 1
+                    stem, ext = file_path.stem, file_path.suffix
+                    arcname = f"{stem}_{seen_names[arcname]}{ext}"
+                else:
+                    seen_names[arcname] = 1
+                zipf.write(str(file_path), arcname)
+                added += 1
+
+        print(f"В архив добавлено {added} файлов из {len(selected_filenames)} выбранных")
         return gr.update(visible=True, value=zip_filename)
     except Exception as e:
         if Path(zip_filename).exists():
