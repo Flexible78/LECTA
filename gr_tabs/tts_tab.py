@@ -71,6 +71,41 @@ def _save_model_map_entry(ab_path, file_stem, model_short):
         pass
 
 
+def _build_file_index(ab_path, rows):
+    """Build {display_name: absolute_mp3_path} from DataFrame rows."""
+    index = {}
+    if not ab_path:
+        return index
+    mp3_dir = data_path / ab_path / "mp3"
+    for row in rows:
+        if not row:
+            continue
+        name = row[0]
+        if name and isinstance(name, str) and name.endswith(".mp3"):
+            index[name] = str((mp3_dir / name).resolve())
+    return index
+
+
+def _project_from_path(p):
+    """Извлекает имя проекта из абсолютного пути к mp3 (data/<project>/mp3/...)."""
+    try:
+        rel = Path(p).resolve().relative_to(data_path.resolve())
+        return rel.parts[0]
+    except Exception:
+        return None
+
+
+def _resolve_path(filename, ab_path, file_index):
+    """Возвращает (project_name, absolute_path) по отображаемому имени файла.
+    Приоритет — индекс; fallback — data_path/ab_path/mp3/filename."""
+    if file_index and filename in file_index:
+        p = Path(file_index[filename])
+        project = _project_from_path(p)
+        return project if project else str(ab_path), p
+    fallback = data_path / str(ab_path) / "mp3" / str(filename)
+    return str(ab_path), fallback
+
+
 def _short_name(name, max_len=24):
     """Умно обрезает имя файла до max_len символов, избегая разрыва слов.
     Не добавляет спецсимволы (…) в имя файла.
@@ -325,6 +360,8 @@ def tts(
             get_files_list(ab_path),
             "⚠️ Нет строк для озвучки!",
             get_metrics_html(0, "00:00", "00:00", "0.0"),
+            gr.update(),
+            {},
         )
         return
 
@@ -356,6 +393,7 @@ def tts(
         "⏳ Инициализация движка...",
         get_metrics_html(0, "00:00", "Оценка...", "0.0"),
         gr.update(),
+        _build_file_index(ab_path, cached_files_list),
     )
 
     def _tts_to_audio(np_audio, sr):
@@ -397,6 +435,7 @@ def tts(
                     "-",
                 ),
                 gr.update(),
+                _build_file_index(ab_path, cached_files_list),
             )
             continue
 
@@ -459,7 +498,7 @@ def tts(
                 log_txt = f"▶ В работе: {file}.xml\n🎙 Озвучка строки: {current_line} из {total_lines}..."
                 # НЕ вызываем get_files_list каждые 3 строки — это запускает ffprobe на всех MP3!
                 # Возвращаем кэшированный список вместо [] чтобы таблица не мигала.
-                yield cached_files_list, log_txt, html, gr.update()
+                yield cached_files_list, log_txt, html, gr.update(), _build_file_index(ab_path, cached_files_list)
 
             # --- ЛОГИКА ГЕНЕРАЦИИ ЗВУКА (ПЕРФ: сбор задач вместо немедленного синтеза) ---
             audio = AudioSegment.empty()
@@ -634,6 +673,7 @@ def tts(
                     "Остановлено",
                 ),
                 gr.update(value=last_final_mp3_path) if last_final_mp3_path else gr.update(),
+                _build_file_index(ab_path, get_files_list(ab_path)),
             )
             return  # Выходим из функции полностью, чтобы не начинать следующий файл
 
@@ -653,6 +693,7 @@ def tts(
                 "-",
             ),
             gr.update(value=last_final_mp3_path),
+            _build_file_index(ab_path, cached_files_list),
         )
 
     # ФИНАЛ
@@ -665,6 +706,7 @@ def tts(
             100, format_time_hms(time.time() - global_start_time), "00:00", "-"
         ),
         gr.update(value=last_final_mp3_path),
+        _build_file_index(ab_path, cached_files_list),
     )
 
 
@@ -718,18 +760,24 @@ def get_files_list(ab_name):
     return rows
 
 
-def create_zip_archive(ab_path):
-    """Сканирует папку mp3 проекта на диске и упаковывает ВСЕ *.mp3 (включая _PARTIAL) в zip."""
-    mp3_dir = data_path / ab_path / "mp3"
-    if not mp3_dir.exists():
-        raise gr.Error(f"Папка с файлами не найдена!")
-
+def create_zip_archive(ab_path, file_index):
+    """Упаковывает ВСЕ mp3 из индекса/таблицы в zip.
+    Если индекс пуст — fallback на сканирование папки текущего проекта."""
     # ⚠️ Предупреждение: синтез не завершён — архив может быть неполным
     if not _synthesis_completed:
         gr.Warning("⚠️ Синтез ещё не завершён! Архив может быть неполным.")
 
-    # Сканируем ВСЕ *.mp3 на диске (а не из таблицы/памяти)
-    mp3_files = sorted(mp3_dir.glob("*.mp3"))
+    mp3_files = []
+    if file_index:
+        for p in file_index.values():
+            path = Path(p)
+            if path.exists():
+                mp3_files.append(path)
+    else:
+        mp3_dir = data_path / ab_path / "mp3"
+        if not mp3_dir.exists():
+            raise gr.Error(f"Папка с файлами не найдена!")
+        mp3_files = sorted(mp3_dir.glob("*.mp3"))
     if not mp3_files:
         raise gr.Error("В папке нет MP3-файлов!")
 
@@ -763,13 +811,8 @@ def create_zip_archive(ab_path):
         raise gr.Error(f"Ошибка: {str(e)}")
 
 
-def create_selected_zip_archive(ab_path, selected_filenames):
-    """Сканирует папку mp3 на диске и упаковывает ТОЛЬКО выбранные файлы в zip.
-    (Подготовлено для Фикса B — чекбоксы строк таблицы.)"""
-    mp3_dir = data_path / ab_path / "mp3"
-    if not mp3_dir.exists():
-        raise gr.Error(f"Папка с файлами не найдена!")
-
+def create_selected_zip_archive(ab_path, selected_filenames, file_index):
+    """Упаковывает ТОЛЬКО выбранные файлы в zip, используя индекс для резолва путей."""
     # ⚠️ Предупреждение: синтез не завершён — архив может быть неполным
     if not _synthesis_completed:
         gr.Warning("⚠️ Синтез ещё не завершён! Архив может быть неполным.")
@@ -784,7 +827,7 @@ def create_selected_zip_archive(ab_path, selected_filenames):
         seen_names = {}
         with zipfile.ZipFile(zip_filename, "w", zipfile.ZIP_DEFLATED) as zipf:
             for fname in selected_filenames:
-                file_path = mp3_dir / fname
+                _, file_path = _resolve_path(fname, ab_path, file_index)
                 if not file_path.exists():
                     gr.Warning(f"Файл не найден на диске: {fname} — пропущен")
                     continue
@@ -808,14 +851,18 @@ def create_selected_zip_archive(ab_path, selected_filenames):
 
 # ── ХЕЛПЕРЫ ДЛЯ ФИКСА B: чекбоксы, массовые операции ──
 
-def get_file_checkbox_choices(ab_name):
+def get_file_checkbox_choices(ab_name, df_output=None):
     """Возвращает список имён mp3-файлов для CheckboxGroup."""
+    if df_output is not None:
+        return gr.update(choices=[row[0] for row in df_output])
     files = get_files_list(ab_name)
     return gr.update(choices=[row[0] for row in files])
 
 
-def select_all_files(ab_name):
-    """Выбрать все mp3-файлы проекта."""
+def select_all_files(ab_name, df_output=None):
+    """Выбрать все mp3-файлы проекта/таблицы."""
+    if df_output is not None:
+        return gr.update(value=[row[0] for row in df_output])
     files = get_files_list(ab_name)
     return gr.update(value=[row[0] for row in files])
 
@@ -825,12 +872,12 @@ def deselect_all_files():
     return gr.update(value=[])
 
 
-def delete_selected_files(selected_filenames, ab_name, confirm_state):
+def delete_selected_files(selected_filenames, ab_name, confirm_state, file_index, df_output):
     """Удаляет выбранные файлы с диска и возвращает обновлённую таблицу.
     Двухкликовое подтверждение: первый клик — предупреждение, второй — удаление."""
     if not selected_filenames:
         gr.Warning("Не выбрано ни одного файла!")
-        return get_files_list(ab_name), gr.update(), "idle", gr.update()
+        return df_output, gr.update(), "idle", gr.update(), file_index
 
     if confirm_state != "confirm":
         files_str = ", ".join(selected_filenames[:5])
@@ -842,23 +889,23 @@ def delete_selected_files(selected_filenames, ab_name, confirm_state):
             gr.update(value="⚠️ Подтвердить удаление"),
             "confirm",
             gr.update(),
+            file_index,
         )
 
     # Второй клик — удаление
-    mp3_dir = data_path / ab_name / "mp3"
     deleted = 0
     errors = 0
     for fname in selected_filenames:
-        file_path = mp3_dir / fname
+        proj, file_path = _resolve_path(fname, ab_name, file_index)
         if file_path.exists():
             try:
                 file_path.unlink()
                 deleted += 1
-                # Чистим запись о модели
-                model_map = _load_model_map(ab_name)
+                # Чистим запись о модели в РЕАЛЬНОМ проекте файла
+                model_map = _load_model_map(proj)
                 if file_path.stem in model_map:
                     model_map.pop(file_path.stem, None)
-                    map_path_j = data_path / ab_name / _MODEL_MAP_FILE
+                    map_path_j = data_path / proj / _MODEL_MAP_FILE
                     try:
                         with open(map_path_j, "w", encoding="utf-8") as f:
                             json.dump(model_map, f, ensure_ascii=False)
@@ -868,21 +915,29 @@ def delete_selected_files(selected_filenames, ab_name, confirm_state):
                 gr.Warning(f"Ошибка удаления {fname}: {e}")
                 errors += 1
 
+    # Удаляем записи из индекса
+    for fname in selected_filenames:
+        if file_index and fname in file_index:
+            del file_index[fname]
+
+    new_df = [row for row in (df_output or []) if row[0] not in selected_filenames]
+    new_choices = gr.update(choices=[row[0] for row in new_df])
+
     gr.Info(f"🗑 Удалено {deleted} файлов" + (f", ошибок: {errors}" if errors else ""))
-    new_choices = get_file_checkbox_choices(ab_name)
     return (
-        get_files_list(ab_name),
+        new_df,
         gr.update(value="🗑 Удалить выбранные"),
         "idle",
         new_choices,
+        file_index,
     )
 
 
-def download_selected_files_zip(ab_name, selected_filenames):
+def download_selected_files_zip(ab_name, selected_filenames, file_index):
     """Создаёт zip из выбранных файлов (через create_selected_zip_archive)."""
     if not selected_filenames:
         raise gr.Error("Не выбрано ни одного файла!")
-    return create_selected_zip_archive(ab_name, selected_filenames)
+    return create_selected_zip_archive(ab_name, selected_filenames, file_index)
 
 
 def download_current_file(file_path):
@@ -899,19 +954,27 @@ def snd_list():
     return gr.update(value="", choices=[])
 
 
-def del_file(filename, ab_name):
+def del_file(filename, ab_name, file_index, df_output):
     if not filename:
-        return get_files_list(ab_name)
+        return df_output, file_index
     file_path = Path(filename)
+    # Ищем отображаемое имя по реальному пути
+    display_name = None
+    if file_index:
+        for disp, p in file_index.items():
+            if Path(p).resolve() == file_path.resolve():
+                display_name = disp
+                break
     if file_path.exists():
         try:
             file_path.unlink()
             gr.Info(f"Удален файл {file_path.name}", duration=2)
-            # Чистим запись о модели в tts_model_map.json
-            model_map = _load_model_map(ab_name)
+            # Чистим запись о модели в РЕАЛЬНОМ проекте файла
+            proj = _project_from_path(file_path) or str(ab_name)
+            model_map = _load_model_map(proj)
             if file_path.stem in model_map:
                 model_map.pop(file_path.stem, None)
-                map_path = data_path / ab_name / _MODEL_MAP_FILE
+                map_path = data_path / proj / _MODEL_MAP_FILE
                 try:
                     with open(map_path, "w", encoding="utf-8") as f:
                         json.dump(model_map, f, ensure_ascii=False)
@@ -919,17 +982,20 @@ def del_file(filename, ab_name):
                     pass
         except Exception as e:
             gr.Warning(f"Ошибка удаления: {e}")
-    return get_files_list(ab_name)
+    # Удаляем запись из индекса
+    if file_index and display_name and display_name in file_index:
+        del file_index[display_name]
+    new_df = [row for row in (df_output or []) if row[0] != display_name]
+    return new_df, file_index
 
 
-def sel_file(data: gr.SelectData, ab_path):
-    mp3_dir = data_path / ab_path / "mp3"
+def sel_file(data: gr.SelectData, ab_path, file_index):
     # Имя файла теперь чистый текст (колонка 0)
     filename_raw = data.row_value[0]
     if not filename_raw or not str(filename_raw).endswith(".mp3"):
         gr.Warning("Не удалось определить имя файла из строки таблицы")
-        return gr.update(), "", gr.update(), gr.update(), gr.update()
-    selected_path = mp3_dir / filename_raw
+        return gr.update(), "", gr.update(), gr.update(), gr.update(), gr.update()
+    _, selected_path = _resolve_path(filename_raw, ab_path, file_index)
     stem_name = selected_path.stem
     return (
         gr.update(interactive=True),
@@ -941,13 +1007,13 @@ def sel_file(data: gr.SelectData, ab_path):
     )
 
 
-def rename_selected_file(current_path, new_name, ab_path):
+def rename_selected_file(current_path, new_name, ab_path, file_index, df_output):
     if not current_path or not new_name:
-        return get_files_list(ab_path), gr.update(visible=False)
+        return df_output, gr.update(visible=False), file_index
     old_path = Path(current_path)
     if not old_path.exists():
         gr.Warning("Файл не найден!")
-        return get_files_list(ab_path), gr.update(visible=False)
+        return df_output, gr.update(visible=False), file_index
 
     safe_name = "".join(
         [c for c in new_name if c.isalnum() or c in (" ", "_", "-")]
@@ -958,12 +1024,21 @@ def rename_selected_file(current_path, new_name, ab_path):
 
     if new_path.exists() and new_path != old_path:
         gr.Warning("Файл с таким именем уже существует!")
-        return get_files_list(ab_path), gr.update()
+        return df_output, gr.update(), file_index
+
+    # Определяем отображаемое имя в индексе
+    display_name = None
+    if file_index:
+        for disp, p in file_index.items():
+            if p == str(old_path):
+                display_name = disp
+                break
 
     try:
         old_path.rename(new_path)
         gr.Info(f"Файл успешно переименован в {safe_name}.mp3")
-        times_file = data_path / ab_path / "parse_times.json"
+        proj = _project_from_path(old_path) or str(ab_path)
+        times_file = data_path / proj / "parse_times.json"
         if times_file.exists():
             with open(times_file, "r", encoding="utf-8") as f:
                 parse_times = json.load(f)
@@ -972,19 +1047,40 @@ def rename_selected_file(current_path, new_name, ab_path):
                 parse_times[safe_name] = parse_times.pop(old_stem)
                 with open(times_file, "w", encoding="utf-8") as f:
                     json.dump(parse_times, f)
-        # Переносим запись о модели в tts_model_map.json
-        model_map = _load_model_map(ab_path)
+        # Переносим запись о модели в tts_model_map.json РЕАЛЬНОГО проекта
+        model_map = _load_model_map(proj)
         if old_path.stem in model_map:
             model_map[safe_name] = model_map.pop(old_path.stem)
-            map_path = data_path / ab_path / _MODEL_MAP_FILE
+            map_path = data_path / proj / _MODEL_MAP_FILE
             try:
                 with open(map_path, "w", encoding="utf-8") as f:
                     json.dump(model_map, f, ensure_ascii=False)
             except Exception:
                 pass
+        # Обновляем индекс
+        if file_index and display_name:
+            del file_index[display_name]
+            new_display_name = display_name
+            if " | " in new_display_name:
+                parts = new_display_name.split(" | ")
+                new_display_name = f"{parts[0]} | {new_path.name}"
+            else:
+                new_display_name = new_path.name
+            file_index[new_display_name] = str(new_path.resolve())
+        # Обновляем таблицу
+        if df_output is not None:
+            new_df = []
+            for row in df_output:
+                if row[0] == display_name:
+                    new_row = list(row)
+                    new_row[0] = new_display_name
+                    new_df.append(new_row)
+                else:
+                    new_df.append(row)
+            df_output = new_df
     except Exception as e:
         gr.Warning(f"Ошибка переименования: {e}")
-    return get_files_list(ab_path), gr.update(visible=False)
+    return df_output, gr.update(visible=False), file_index
 
 
 def stop_tts():
@@ -1022,6 +1118,7 @@ def batch_tts_all_projects(
             "⚠️ Нет проектов для пакетной озвучки!",
             get_batch_metrics_html("", 0, 0, 0, 0, "00:00", "00:00", "0.0"),
             gr.update(),
+            batch_file_index,
         )
         return
 
@@ -1034,6 +1131,8 @@ def batch_tts_all_projects(
     processed_count = 0
     all_files = []  # НАКАПЛИВАЕМ MP3 ВСЕХ ПРОЕКТОВ
     batch_stats = []  # для финальной сводной таблицы
+    batch_file_index = {}  # display_name -> absolute_mp3_path
+    seen_display_names = set()  # для отслеживания коллизий имён
 
     # Загружаем настройки парсинга из сохранённой конфигурации
     try:
@@ -1053,6 +1152,7 @@ def batch_tts_all_projects(
         f"📦 Подготовка {total} проектов...",
         get_batch_metrics_html("Подготовка...", 0, 0, total, 0, "00:00", "...", "..."),
         gr.update(),
+        batch_file_index,
     )
 
     last_final_mp3_path = ""
@@ -1082,6 +1182,7 @@ def batch_tts_all_projects(
                 f"🛑 Остановлено! Озвучено {processed_count} из {total}",
                 partial_html,
                 gr.update(value=last_final_mp3_path) if last_final_mp3_path else gr.update(),
+                batch_file_index,
             )
             return
 
@@ -1103,17 +1204,18 @@ def batch_tts_all_projects(
                 all_files,
                 f"📁 [{idx}/{total}] {project}: Парсинг FB2 → XML...",
                 get_batch_metrics_html(
-                    project,
-                    0,
-                    idx,
-                    total,
-                    batch_pre_pct,
-                    format_time_hms(elapsed),
-                    format_time_hms(rem),
-                    f"~{format_time_hms(sec_per_proj)}/пр",
-                ),
-                gr.update(),
-            )
+                        project,
+                        0,
+                        idx,
+                        total,
+                        batch_pre_pct,
+                        format_time_hms(elapsed),
+                        format_time_hms(rem),
+                        f"~{format_time_hms(sec_per_proj)}/пр",
+                    ),
+                    gr.update(),
+                    batch_file_index,
+                )
             try:
                 # Используем сохранённые настройки парсинга из конфигурации
                 proc = FB2Processor()
@@ -1192,6 +1294,7 @@ def batch_tts_all_projects(
                         "...",
                     ),
                     gr.update(),
+                    batch_file_index,
                 )
                 continue
 
@@ -1211,7 +1314,7 @@ def batch_tts_all_projects(
         ):
             if stop_text_to_sp:
                 break
-            files_list, log_msg, tts_html, _ = tts_result
+            files_list, log_msg, tts_html, audio_update, _ = tts_result
 
             # Извлекаем процент текущего проекта из HTML tts()
             project_pct = parse_percent_from_html(tts_html)
@@ -1244,7 +1347,7 @@ def batch_tts_all_projects(
             )
             # НАКАПЛИВАЕМ: текущие файлы проекта + все предыдущие
             combined_display = all_files + files_list
-            yield combined_display, f"[{idx}/{total}] {project}: {log_msg}", batch_html, gr.update()
+            yield combined_display, f"[{idx}/{total}] {project}: {log_msg}", batch_html, audio_update, batch_file_index
 
         # Собираем статистику по завершённому проекту
         dur, size_mb, proc_time = get_project_stats(project)
@@ -1260,7 +1363,16 @@ def batch_tts_all_projects(
 
         # НАКАПЛИВАЕМ: добавляем MP3 завершённого проекта в общий список
         project_files = get_files_list(project)
-        all_files.extend(project_files)
+        for r in project_files:
+            rc = list(r)
+            filename = rc[0]
+            display_name = filename
+            if display_name in seen_display_names:
+                display_name = f"{project} | {filename}"
+            seen_display_names.add(display_name)
+            batch_file_index[display_name] = str((data_path / project / "mp3" / filename).resolve())
+            rc[0] = display_name
+            all_files.append(rc)
         if project_files:
             last_file_name = project_files[-1][0]
             if "_PARTIAL" not in last_file_name:
@@ -1291,6 +1403,7 @@ def batch_tts_all_projects(
         f"🎉 ГОТОВО! Озвучено {processed_count} из {total} проектов",
         final_html,
         gr.update(value=last_final_mp3_path),
+        batch_file_index,
     )
 
 
@@ -1428,6 +1541,7 @@ def tts_tab(ab_path, tts_state):
 
         with gr.Row():
             cur_file = gr.State()
+            batch_file_index_state = gr.State({})
 
         # Таблица аудио: узкие колонки + колонка «Модель» (короткое имя)
         df_output = gr.DataFrame(
@@ -1503,7 +1617,7 @@ def tts_tab(ab_path, tts_state):
     download_btn.click(
         fn=lambda: gr.DownloadButton(visible=False), outputs=download_btn
     )
-    create_arh_btn.click(create_zip_archive, inputs=ab_path, outputs=download_btn)
+    create_arh_btn.click(create_zip_archive, inputs=[ab_path, batch_file_index_state], outputs=download_btn)
 
     # ── ФИКС B: скачивание выбранной строки ──
     row_download_btn.click(
@@ -1514,18 +1628,18 @@ def tts_tab(ab_path, tts_state):
 
     df_output.select(
         sel_file,
-        inputs=ab_path,
+        inputs=[ab_path, batch_file_index_state],
         outputs=[del_btn, cur_file, rename_panel, new_name_input, audio_player, row_download_btn],
     )
     rename_btn.click(
         rename_selected_file,
-        inputs=[cur_file, new_name_input, ab_path],
-        outputs=[df_output, rename_panel],
+        inputs=[cur_file, new_name_input, ab_path, batch_file_index_state, df_output],
+        outputs=[df_output, rename_panel, batch_file_index_state],
     )
 
     # ── ФИКС B: выбрать все / снять всё для файлов ──
     sel_all_files_btn.click(
-        fn=select_all_files, inputs=[ab_path], outputs=[file_checkboxes]
+        fn=select_all_files, inputs=[ab_path, df_output], outputs=[file_checkboxes]
     )
     desel_all_files_btn.click(
         fn=deselect_all_files, outputs=[file_checkboxes]
@@ -1534,7 +1648,7 @@ def tts_tab(ab_path, tts_state):
     # ── ФИКС B: скачать выбранные (zip) ──
     dl_selected_btn.click(
         fn=download_selected_files_zip,
-        inputs=[ab_path, file_checkboxes],
+        inputs=[ab_path, file_checkboxes, batch_file_index_state],
         outputs=[dl_selected_output],
     )
     dl_selected_output.click(
@@ -1550,8 +1664,8 @@ def tts_tab(ab_path, tts_state):
     )
     del_selected_btn.click(
         fn=delete_selected_files,
-        inputs=[file_checkboxes, ab_path, del_confirm_state],
-        outputs=[df_output, del_selected_btn, del_confirm_state, file_checkboxes],
+        inputs=[file_checkboxes, ab_path, del_confirm_state, batch_file_index_state, df_output],
+        outputs=[df_output, del_selected_btn, del_confirm_state, file_checkboxes, batch_file_index_state],
     )
 
     tts_button.click(
@@ -1573,7 +1687,7 @@ def tts_tab(ab_path, tts_state):
             use_sound_effect,
             use_accents,
         ],
-        outputs=[df_output, output_log, metrics_panel, audio_player],
+        outputs=[df_output, output_log, metrics_panel, audio_player, batch_file_index_state],
     ).then(
         fn=_play_completion_sound,
         outputs=completion_sound_html,
@@ -1613,19 +1727,25 @@ def tts_tab(ab_path, tts_state):
             repl,
             batch_project_sel,
         ],
-        outputs=[df_output, output_log, metrics_panel, audio_player],
+        outputs=[df_output, output_log, metrics_panel, audio_player, batch_file_index_state],
     ).then(
         fn=_play_completion_sound,
         outputs=completion_sound_html,
     )
 
     stop_btn.click(stop_tts, outputs=output_log, queue=False)
-    del_btn.click(del_file, inputs=[cur_file, ab_path], outputs=[df_output]).then(
+    del_btn.click(del_file, inputs=[cur_file, ab_path, batch_file_index_state, df_output], outputs=[df_output, batch_file_index_state]).then(
         fn=lambda: gr.update(visible=False), outputs=[rename_panel]
     ).then(
-        fn=get_file_checkbox_choices, inputs=[ab_path], outputs=[file_checkboxes]
+        fn=get_file_checkbox_choices, inputs=[ab_path, df_output], outputs=[file_checkboxes]
     )
-    tts_tab_ui.select(fn=get_files_list, inputs=ab_path, outputs=df_output).then(
-        fn=get_file_checkbox_choices, inputs=[ab_path], outputs=[file_checkboxes]
+
+    def _reset_table_on_tab(ab_name):
+        rows = get_files_list(ab_name)
+        index = _build_file_index(ab_name, rows)
+        return rows, index
+
+    tts_tab_ui.select(fn=_reset_table_on_tab, inputs=ab_path, outputs=[df_output, batch_file_index_state]).then(
+        fn=get_file_checkbox_choices, inputs=[ab_path, df_output], outputs=[file_checkboxes]
     )
     tts_state.change(change_tts_model, inputs=tts_state, outputs=spk_sel)
