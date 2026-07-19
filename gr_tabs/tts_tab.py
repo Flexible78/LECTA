@@ -558,7 +558,7 @@ def tts(
             out_audio.export(save_path, format="mp3", bitrate=f"{bitrate}", tags=tags)
 
         # Запоминаем модель, использованную для этого файла (читаем synth.ver непосредственно перед сохранением)
-        model_short = get_model_short_name(synth.ver) if synth.ver else "Модель?"
+        model_short = get_model_short_name(synth.ver)
         # При прерывании файл сохраняется с суффиксом _PARTIAL — сохраняем метаданные под его реальным именем
         saved_stem = partial_mp3_file.stem if was_interrupted else mp3_file.stem
         _save_model_map_entry(ab_path, saved_stem, model_short)
@@ -754,6 +754,92 @@ def create_selected_zip_archive(ab_path, selected_filenames):
         raise gr.Error(f"Ошибка: {str(e)}")
 
 
+# ── ХЕЛПЕРЫ ДЛЯ ФИКСА B: чекбоксы, массовые операции ──
+
+def get_file_checkbox_choices(ab_name):
+    """Возвращает список имён mp3-файлов для CheckboxGroup."""
+    files = get_files_list(ab_name)
+    return gr.update(choices=[row[0] for row in files])
+
+
+def select_all_files(ab_name):
+    """Выбрать все mp3-файлы проекта."""
+    files = get_files_list(ab_name)
+    return gr.update(value=[row[0] for row in files])
+
+
+def deselect_all_files():
+    """Снять выделение со всех файлов."""
+    return gr.update(value=[])
+
+
+def delete_selected_files(selected_filenames, ab_name, confirm_state):
+    """Удаляет выбранные файлы с диска и возвращает обновлённую таблицу.
+    Двухкликовое подтверждение: первый клик — предупреждение, второй — удаление."""
+    if not selected_filenames:
+        gr.Warning("Не выбрано ни одного файла!")
+        return get_files_list(ab_name), gr.update(), "idle", gr.update()
+
+    if confirm_state != "confirm":
+        files_str = ", ".join(selected_filenames[:5])
+        if len(selected_filenames) > 5:
+            files_str += f" ... и ещё {len(selected_filenames) - 5}"
+        gr.Warning(f"⚠️ Будут удалены: {files_str}. Нажмите ещё раз для подтверждения.")
+        return (
+            gr.update(),
+            gr.update(value="⚠️ Подтвердить удаление"),
+            "confirm",
+            gr.update(),
+        )
+
+    # Второй клик — удаление
+    mp3_dir = data_path / ab_name / "mp3"
+    deleted = 0
+    errors = 0
+    for fname in selected_filenames:
+        file_path = mp3_dir / fname
+        if file_path.exists():
+            try:
+                file_path.unlink()
+                deleted += 1
+                # Чистим запись о модели
+                model_map = _load_model_map(ab_name)
+                if file_path.stem in model_map:
+                    model_map.pop(file_path.stem, None)
+                    map_path_j = data_path / ab_name / _MODEL_MAP_FILE
+                    try:
+                        with open(map_path_j, "w", encoding="utf-8") as f:
+                            json.dump(model_map, f, ensure_ascii=False)
+                    except Exception:
+                        pass
+            except Exception as e:
+                gr.Warning(f"Ошибка удаления {fname}: {e}")
+                errors += 1
+
+    gr.Info(f"🗑 Удалено {deleted} файлов" + (f", ошибок: {errors}" if errors else ""))
+    new_choices = get_file_checkbox_choices(ab_name)
+    return (
+        get_files_list(ab_name),
+        gr.update(value="🗑 Удалить выбранные"),
+        "idle",
+        new_choices,
+    )
+
+
+def download_selected_files_zip(ab_name, selected_filenames):
+    """Создаёт zip из выбранных файлов (через create_selected_zip_archive)."""
+    if not selected_filenames:
+        raise gr.Error("Не выбрано ни одного файла!")
+    return create_selected_zip_archive(ab_name, selected_filenames)
+
+
+def download_current_file(file_path):
+    """Скачать выбранный mp3-файл."""
+    if not file_path or not Path(file_path).exists():
+        raise gr.Error("Файл не найден!")
+    return gr.update(value=file_path)
+
+
 def snd_list():
     snd_path = sound_dir / "back"
     if snd_path.exists():
@@ -799,6 +885,7 @@ def sel_file(data: gr.SelectData, ab_path):
         gr.update(visible=True),
         gr.update(value=stem_name),
         str(selected_path),
+        gr.update(interactive=True),
     )
 
 
@@ -1320,6 +1407,13 @@ def tts_tab(ab_path, tts_state):
                     elem_id="del_file_btn",
                     size="sm",
                 )
+                row_download_btn = gr.DownloadButton(
+                    "📥 Скачать файл",
+                    value=None,
+                    variant="secondary",
+                    visible=True,
+                    size="sm",
+                )
                 create_arh_btn = gr.Button("📦 Создать архив", size="sm")
                 download_btn = gr.DownloadButton(
                     "📥 Скачать архив",
@@ -1329,19 +1423,83 @@ def tts_tab(ab_path, tts_state):
                     size="sm",
                 )
 
+            # ── ФИКС B: чекбоксы и массовые операции над файлами ──
+            with gr.Row():
+                file_checkboxes = gr.CheckboxGroup(
+                    choices=[],
+                    label="🎯 Выберите файлы для массовых операций",
+                    interactive=True,
+                    elem_id="file_checkboxes",
+                )
+
+            with gr.Row():
+                sel_all_files_btn = gr.Button("✅ Выбрать все", size="sm", scale=1)
+                desel_all_files_btn = gr.Button("⬜ Снять всё", size="sm", scale=1)
+
+            with gr.Row():
+                dl_selected_btn = gr.Button(
+                    "📦 Скачать выбранные (zip)", size="sm", variant="primary"
+                )
+                dl_selected_output = gr.DownloadButton(visible=False, size="sm")
+                del_selected_btn = gr.Button(
+                    "🗑 Удалить выбранные", size="sm", variant="stop"
+                )
+
+            # Состояние подтверждения для массового удаления
+            del_confirm_state = gr.State("idle")
+
     download_btn.click(
         fn=lambda: gr.DownloadButton(visible=False), outputs=download_btn
     )
     create_arh_btn.click(create_zip_archive, inputs=ab_path, outputs=download_btn)
+
+    # ── ФИКС B: скачивание выбранной строки ──
+    row_download_btn.click(
+        fn=download_current_file,
+        inputs=[cur_file],
+        outputs=[row_download_btn],
+    )
+
     df_output.select(
         sel_file,
         inputs=ab_path,
-        outputs=[del_btn, cur_file, rename_panel, new_name_input, audio_player],
+        outputs=[del_btn, cur_file, rename_panel, new_name_input, audio_player, row_download_btn],
     )
     rename_btn.click(
         rename_selected_file,
         inputs=[cur_file, new_name_input, ab_path],
         outputs=[df_output, rename_panel],
+    )
+
+    # ── ФИКС B: выбрать все / снять всё для файлов ──
+    sel_all_files_btn.click(
+        fn=select_all_files, inputs=[ab_path], outputs=[file_checkboxes]
+    )
+    desel_all_files_btn.click(
+        fn=deselect_all_files, outputs=[file_checkboxes]
+    )
+
+    # ── ФИКС B: скачать выбранные (zip) ──
+    dl_selected_btn.click(
+        fn=download_selected_files_zip,
+        inputs=[ab_path, file_checkboxes],
+        outputs=[dl_selected_output],
+    )
+    dl_selected_output.click(
+        fn=lambda: gr.DownloadButton(visible=False),
+        outputs=[dl_selected_output],
+    )
+
+    # ── ФИКС B: удалить выбранные (с подтверждением) ──
+    # Сброс подтверждения при изменении выбора файлов
+    file_checkboxes.change(
+        fn=lambda: (gr.update(value="🗑 Удалить выбранные"), "idle"),
+        outputs=[del_selected_btn, del_confirm_state],
+    )
+    del_selected_btn.click(
+        fn=delete_selected_files,
+        inputs=[file_checkboxes, ab_path, del_confirm_state],
+        outputs=[df_output, del_selected_btn, del_confirm_state, file_checkboxes],
     )
 
     tts_button.click(
@@ -1412,6 +1570,10 @@ def tts_tab(ab_path, tts_state):
     stop_btn.click(stop_tts, outputs=output_log, queue=False)
     del_btn.click(del_file, inputs=[cur_file, ab_path], outputs=[df_output]).then(
         fn=lambda: gr.update(visible=False), outputs=[rename_panel]
+    ).then(
+        fn=get_file_checkbox_choices, inputs=[ab_path], outputs=[file_checkboxes]
     )
-    tts_tab_ui.select(fn=get_files_list, inputs=ab_path, outputs=df_output)
+    tts_tab_ui.select(fn=get_files_list, inputs=ab_path, outputs=df_output).then(
+        fn=get_file_checkbox_choices, inputs=[ab_path], outputs=[file_checkboxes]
+    )
     tts_state.change(change_tts_model, inputs=tts_state, outputs=spk_sel)
