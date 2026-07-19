@@ -4,6 +4,8 @@ import re
 import tempfile
 import time
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
+import threading
 from pathlib import Path
 
 import gradio as gr
@@ -32,6 +34,12 @@ sound_dir = now_dir / "sound"
 stop_text_to_sp = False
 _synthesis_completed = False
 txt_parser = TextParse(False)
+
+# ═══ ПЕРФ: глобальный executor + кэш сегментов (разделяется между проектами) ═══
+_tts_executor = ThreadPoolExecutor(max_workers=8)
+_local_segment_cache = {}
+_local_cache_lock = threading.Lock()
+_local_tts_lock = threading.Lock()  # защита от GPU-конкуренции Silero/F5
 
 # ═══ КАРТА МОДЕЛЕЙ ДЛЯ ОТСЛЕЖИВАНИЯ ═══
 # Сохраняет какое короткое имя модели использовалось для каждого MP3 файла.
@@ -178,6 +186,57 @@ def add_reverb(audio, room_size=0.3, wet_gain=-15, decay_rate=0.4):
     return output
 
 
+# ═══ ПЕРФ: статические хелперы для параллельного синтеза ═══
+
+def _safe_synth_static(text, speaker_id, speed, noise, use_accents, disable_norm=False):
+    """Module-level safe_synth с кэшированием. Используется в потоках executor'а."""
+    txt = text if disable_norm else txt_parser.garbage(normalize_russian(text))
+    if use_accents and not disable_norm:
+        try:
+            txt = accentizer.process_accent(txt, r"\\+\\w+|\\w+\\+\\w+")
+        except Exception:
+            pass
+    cache_key = f"{txt}|{speaker_id}|{speed}|{noise}"
+    with _local_cache_lock:
+        if cache_key in _local_segment_cache:
+            return _local_segment_cache[cache_key]
+    # Защита GPU для Silero/F5: только один поток одновременно
+    with _local_tts_lock:
+        res = synth.synth_audio(txt, speaker_id=speaker_id, speed=speed, noise=noise)
+    if res is None:
+        return None, None
+    a, b = res
+    if isinstance(a, (int, float)):
+        sr, aud_raw = int(a), b
+    elif isinstance(b, (int, float)):
+        sr, aud_raw = int(b), a
+    else:
+        sr, aud_raw = 24000, a
+    with _local_cache_lock:
+        _local_segment_cache[cache_key] = (sr, aud_raw)
+    return sr, aud_raw
+
+
+def _execute_text_chunk(text, speaker_id, speed, noise, use_accents,
+                        use_edge_en, use_edge_he, use_edge_ru, dict_mode):
+    """Выполняет синтез одного текстового чанка через process_multilingual_text.
+    Возвращает (sr, np_audio, elapsed_sec)."""
+    t0 = time.time()
+
+    def synth_fn(t, disable_norm=False):
+        return _safe_synth_static(t, speaker_id, speed, noise, use_accents, disable_norm)
+
+    sr, np_audio = process_multilingual_text(
+        text, synth_fn,
+        use_edge_en=use_edge_en,
+        use_edge_he=use_edge_he,
+        use_edge_ru=use_edge_ru,
+        dict_mode=dict_mode,
+    )
+    elapsed = time.time() - t0
+    return sr, np_audio, elapsed
+
+
 # === ОСНОВНОЙ ГЕНЕРАТОР ОЗВУЧКИ ===
 def tts(
     ab_path,
@@ -299,26 +358,6 @@ def tts(
         gr.update(),
     )
 
-    # ── Общий safe_synth (используется flush_text_buffer и cite/empty-line обработкой) ──
-    def safe_synth(t, disable_norm=False):
-        txt = t if disable_norm else txt_parser.garbage(normalize_russian(t))
-        if use_accents and not disable_norm:
-            try:
-                txt = accentizer.process_accent(txt, r"\+\w+|\w+\+\w+")
-            except Exception:
-                pass
-        res = synth.synth_audio(txt, speaker_id=spk_sel, speed=sp_rate, noise=noise_lvl)
-        if res is None:
-            return None, None
-        a, b = res
-        if isinstance(a, (int, float)):
-            sr, aud_raw = int(a), b
-        elif isinstance(b, (int, float)):
-            sr, aud_raw = int(b), a
-        else:
-            sr, aud_raw = 24000, a
-        return sr, aud_raw
-
     def _tts_to_audio(np_audio, sr):
         """Конвертирует numpy-аудио в AudioSegment."""
         if np_audio is not None and getattr(np_audio, "size", 0) > 0:
@@ -372,14 +411,16 @@ def tts(
             AudioSegment.silent(duration=1000, frame_rate=24000)
         ]  # Начальная пауза 1 сек + накопление сегментов
 
-        # ── БУФЕР ДЛЯ ЯЗЫКОВО-ОСНОВАННОГО БАТЧИНГА ──
+        # ── БУФЕР ДЛЯ ЯЗЫКОВО-ОСНОВАННОГО БАТЧИНГА + DEFERRED SYNTH ──
         text_buffer = []
         buffer_lang = None  # текущий язык буфера
         buffer_chars = 0  # суммарная длина символов в буфере
-        _BATCH_MAX_CHARS = 1000
+        _BATCH_MAX_CHARS = 4000  # ПЕРФ: увеличен для лучшего Edge TTS параллелизма
+        pending_tasks = []  # ПЕРФ: задачи синтеза + аудио-эффекты (в порядке)
+        chunk_timings = []  # ПЕРФ: замеры времени на каждый чанк
 
         def flush_text_buffer():
-            """Сбрасывает накопленные строки в TTS одним батчем."""
+            """ПЕРФ: собирает текст в pending_tasks вместо немедленного синтеза."""
             nonlocal text_buffer, buffer_lang, buffer_chars
             if not text_buffer:
                 return
@@ -387,19 +428,13 @@ def tts(
             text_buffer.clear()
             buffer_lang = None
             buffer_chars = 0
-            try:
-                sr, np_audio = process_multilingual_text(
-                    joined,
-                    safe_synth,
-                    use_edge_en=router.USE_EDGE_FOR_ENGLISH,
-                    use_edge_he=router.USE_EDGE_FOR_HEBREW,
-                    use_edge_ru=router.USE_EDGE_FOR_RUSSIAN,
-                    dict_mode=router.DICTIONARY_MODE,
-                )
-            except Exception as e:
-                print(f"Router Error: {e}")
-                np_audio, sr = None, None
-            audio_segments.append(_tts_to_audio(np_audio, sr))
+            # Отправляем в executor — синтез будет выполнен параллельно
+            f = _tts_executor.submit(
+                _execute_text_chunk, joined, spk_sel, sp_rate, noise_lvl, use_accents,
+                router.USE_EDGE_FOR_ENGLISH, router.USE_EDGE_FOR_HEBREW,
+                router.USE_EDGE_FOR_RUSSIAN, router.DICTIONARY_MODE,
+            )
+            pending_tasks.append({"type": "text", "future": f})
 
         for i, line in enumerate(root):
             if stop_text_to_sp:
@@ -426,17 +461,14 @@ def tts(
                 # Возвращаем кэшированный список вместо [] чтобы таблица не мигала.
                 yield cached_files_list, log_txt, html, gr.update()
 
-            # --- ЛОГИКА ГЕНЕРАЦИИ ЗВУКА (с буферизацией для Edge TTS) ---
+            # --- ЛОГИКА ГЕНЕРАЦИИ ЗВУКА (ПЕРФ: сбор задач вместо немедленного синтеза) ---
             audio = AudioSegment.empty()
             if line.tag == "sound" and use_sound_effect:
                 flush_text_buffer()
-                sound_file = sound_dir / "events" / f"{line.get('value')}.wav"
-                audio = AudioSegment.from_wav(str(sound_file))
-                audio = effects.normalize(audio)
+                pending_tasks.append({"type": "sound", "value": line.get("value")})
             elif line.tag == "break":
                 flush_text_buffer()
-                slt = int(line.get("time")) * 100
-                audio = AudioSegment.silent(duration=slt)
+                pending_tasks.append({"type": "break", "time": int(line.get("time"))})
             elif (
                 line.tag in ("cite", "empty-line")
                 and use_sound_effect
@@ -445,42 +477,35 @@ def tts(
                 # cite/empty-line БЕЗ текста: просто сброс буфера
                 flush_text_buffer()
             elif line.tag in ("cite", "empty-line") and use_sound_effect and line.text:
-                # cite/empty-line С текстом: обрабатываем инлайн, чтобы применить реверб/префикс
+                # cite/empty-line С текстом: defer to executor
                 flush_text_buffer()
-                try:
-                    sr, np_audio = process_multilingual_text(
-                        line.text,
-                        safe_synth,
-                        use_edge_en=router.USE_EDGE_FOR_ENGLISH,
-                        use_edge_he=router.USE_EDGE_FOR_HEBREW,
-                        use_edge_ru=router.USE_EDGE_FOR_RUSSIAN,
-                        dict_mode=router.DICTIONARY_MODE,
-                    )
-                except Exception as e:
-                    print(f"Router Error: {e}")
-                    np_audio, sr = None, None
-                audio = _tts_to_audio(np_audio, sr)
+                task_meta = {"type": "text_inline"}
+                if line.tag == "cite":
+                    task_meta["cite"] = True
+                    task_meta["cite_position"] = line.get("position")
+                if line.tag == "empty-line":
+                    task_meta["empty_line"] = True
+                f = _tts_executor.submit(
+                    _execute_text_chunk, line.text, spk_sel, sp_rate, noise_lvl, use_accents,
+                    router.USE_EDGE_FOR_ENGLISH, router.USE_EDGE_FOR_HEBREW,
+                    router.USE_EDGE_FOR_RUSSIAN, router.DICTIONARY_MODE,
+                )
+                task_meta["future"] = f
+                pending_tasks.append(task_meta)
             elif line.text:
                 # Обычный текст: language-aware batching
                 stripped = line.text.strip()
                 line_lang = _detect_lang(stripped)
 
-                # mixed-строки: сброс буфера и обработка как есть (роутер разобьёт)
+                # mixed-строки: сброс буфера + defer to executor
                 if line_lang == "mixed":
                     flush_text_buffer()
-                    try:
-                        sr, np_audio = process_multilingual_text(
-                            stripped,
-                            safe_synth,
-                            use_edge_en=router.USE_EDGE_FOR_ENGLISH,
-                            use_edge_he=router.USE_EDGE_FOR_HEBREW,
-                            use_edge_ru=router.USE_EDGE_FOR_RUSSIAN,
-                            dict_mode=router.DICTIONARY_MODE,
-                        )
-                    except Exception as e:
-                        print(f"Router Error: {e}")
-                        np_audio, sr = None, None
-                    audio_segments.append(_tts_to_audio(np_audio, sr))
+                    f = _tts_executor.submit(
+                        _execute_text_chunk, stripped, spk_sel, sp_rate, noise_lvl, use_accents,
+                        router.USE_EDGE_FOR_ENGLISH, router.USE_EDGE_FOR_HEBREW,
+                        router.USE_EDGE_FOR_RUSSIAN, router.DICTIONARY_MODE,
+                    )
+                    pending_tasks.append({"type": "text_inline", "future": f})
                 else:
                     # Проверяем: можно ли добавить в текущий буфер?
                     can_batch = (
@@ -494,25 +519,52 @@ def tts(
                     buffer_lang = line_lang
                     buffer_chars += len(stripped) + 1  # +1 за '\n'
 
-            if line.tag == "cite" and use_sound_effect:
-                audio = add_reverb(audio)
-                if line.get("position") == "start":
-                    pr_audio = AudioSegment.from_wav(
-                        sound_dir / "pause" / "min_cite.wav"
-                    )
-                    pr_audio = effects.normalize(pr_audio)
-                    audio = pr_audio + audio
-            if line.tag == "empty-line" and use_sound_effect:
-                pr_audio = AudioSegment.from_wav(sound_dir / "pause" / "empty.wav")
-                pr_audio = effects.normalize(pr_audio)
-                audio = pr_audio + audio
+            # Для cite/empty-line с текстом аудио будет создано позже из future
+            if line.tag in ("cite", "empty-line") and use_sound_effect and line.text:
+                audio = None  # не добавляем сейчас — будет собрано из future
 
             # Добавляем аудио если оно не пустое (пустое = текст ушёл в буфер)
-            if len(audio) > 0 or (line.tag != "" and not line.text):
-                audio_segments.append(audio)
+            # ПЕРФ: не добавляем audio_segments здесь — всё идёт через pending_tasks
 
         # Сбрасываем остатки буфера после цикла
         flush_text_buffer()
+
+        # ── ПЕРФ: разрешаем все отложенные задачи синтеза (futures) ──
+        text_task_count = sum(1 for t in pending_tasks if "future" in t)
+        for task in pending_tasks:
+            if task["type"] == "text":
+                sr, np_audio, elapsed = task["future"].result()
+                chunk_timings.append(elapsed)
+                audio_segments.append(_tts_to_audio(np_audio, sr))
+            elif task["type"] == "text_inline":
+                sr, np_audio, elapsed = task["future"].result()
+                chunk_timings.append(elapsed)
+                audio = _tts_to_audio(np_audio, sr)
+                if task.get("cite"):
+                    audio = add_reverb(audio)
+                    if task.get("cite_position") == "start":
+                        pr = AudioSegment.from_wav(sound_dir / "pause" / "min_cite.wav")
+                        pr = effects.normalize(pr)
+                        audio = pr + audio
+                if task.get("empty_line"):
+                    pr = AudioSegment.from_wav(sound_dir / "pause" / "empty.wav")
+                    pr = effects.normalize(pr)
+                    audio = pr + audio
+                audio_segments.append(audio)
+            elif task["type"] == "sound":
+                sf = sound_dir / "events" / f"{task['value']}.wav"
+                audio_segments.append(effects.normalize(AudioSegment.from_wav(str(sf))))
+            elif task["type"] == "break":
+                slt = task["time"] * 100
+                audio_segments.append(AudioSegment.silent(duration=slt))
+
+        # ПЕРФ: лог параллельного синтеза
+        if chunk_timings:
+            total_chunk_time = sum(chunk_timings)
+            avg = total_chunk_time / len(chunk_timings)
+            max_t = max(chunk_timings)
+            print(f"[PERF] {len(chunk_timings)} чанков синтезировано (всего текстовых задач: {text_task_count})")
+            print(f"[PERF] Среднее время чанка: {avg:.2f}s | Макс: {max_t:.2f}s | Суммарно: {total_chunk_time:.1f}s")
 
         # --- O(n) КОНКАТЕНАЦИЯ ВСЕХ СЕГМЕНТОВ (вместо O(n²) через оператор +) ---
         out_audio = _concat_audio_segments(audio_segments)
