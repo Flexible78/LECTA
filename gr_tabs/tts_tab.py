@@ -672,7 +672,7 @@ def tts(
                     "-",
                     "Остановлено",
                 ),
-                gr.update(value=last_final_mp3_path) if last_final_mp3_path else gr.update(),
+                _safe_audio(last_final_mp3_path),
                 _build_file_index(ab_path, get_files_list(ab_path)),
             )
             return  # Выходим из функции полностью, чтобы не начинать следующий файл
@@ -692,7 +692,7 @@ def tts(
                 ),
                 "-",
             ),
-            gr.update(value=last_final_mp3_path),
+            _safe_audio(last_final_mp3_path),
             _build_file_index(ab_path, cached_files_list),
         )
 
@@ -705,7 +705,7 @@ def tts(
         get_metrics_html(
             100, format_time_hms(time.time() - global_start_time), "00:00", "-"
         ),
-        gr.update(value=last_final_mp3_path),
+        _safe_audio(last_final_mp3_path),
         _build_file_index(ab_path, cached_files_list),
     )
 
@@ -1181,7 +1181,7 @@ def batch_tts_all_projects(
                 all_files,
                 f"🛑 Остановлено! Озвучено {processed_count} из {total}",
                 partial_html,
-                gr.update(value=last_final_mp3_path) if last_final_mp3_path else gr.update(),
+                _safe_audio(last_final_mp3_path),
                 batch_file_index,
             )
             return
@@ -1426,9 +1426,19 @@ def batch_tts_all_projects(
         all_files,
         f"🎉 ГОТОВО! Озвучено {processed_count} из {total} проектов",
         final_html,
-        gr.update(value=last_final_mp3_path),
+        _safe_audio(last_final_mp3_path),
         batch_file_index,
     )
+
+
+def _safe_audio(p):
+    """gr.update для плеера: только если это реальный ФАЙЛ, иначе без изменений (защита от PermissionError на пустом/папочном пути)."""
+    try:
+        if p and Path(p).is_file():
+            return gr.update(value=p)
+    except Exception:
+        pass
+    return gr.update()
 
 
 def _play_completion_sound():
