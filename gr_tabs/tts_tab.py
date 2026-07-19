@@ -1190,11 +1190,35 @@ def batch_tts_all_projects(
         xml_dir = work_dir / "xml"
         fb2_file = work_dir / f"{project}.fb2"
 
-        if not fb2_file.exists():
+        has_xml = xml_dir.exists() and bool(list(xml_dir.glob("*.xml")))
+
+        # txt-проект без fb2 и без xml → создаём fb2 из первого *.txt
+        if not has_xml and not fb2_file.exists():
+            txt_files = sorted(work_dir.glob("*.txt"))
+            if txt_files:
+                try:
+                    raw_text = txt_files[0].read_text(encoding="utf-8", errors="ignore")
+                    raw_text = raw_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                    body = "".join(f"<p>{p.strip()}</p>\n" for p in raw_text.split("\n") if p.strip())
+                    fb2_xml = (
+                        '<?xml version="1.0" encoding="utf-8"?>\n'
+                        '<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0">\n'
+                        f'  <description><title-info><book-title>{project}</book-title></title-info></description>\n'
+                        f'  <body><section>\n{body}</section></body>\n'
+                        '</FictionBook>'
+                    )
+                    fb2_file.write_text(fb2_xml, encoding="utf-8")
+                except Exception as e:
+                    yield (all_files, f"⚠️ [{idx}/{total}] {project}: не удалось создать fb2 из txt: {e}", gr.update(), gr.update(), batch_file_index)
+                    continue
+
+        # нет ни xml, ни fb2 (и txt не нашёлся) → пропуск с логом
+        if not has_xml and not fb2_file.exists():
+            yield (all_files, f"⚠️ [{idx}/{total}] {project}: пропущен — нет XML/FB2/TXT", gr.update(), gr.update(), batch_file_index)
             continue
 
         # Авто-парсинг FB2 если XML ещё нет
-        if not xml_dir.exists() or not list(xml_dir.glob("*.xml")):
+        if not has_xml:
             batch_pre_pct = int((idx - 1) / total * 100)
             elapsed = time.time() - global_start
             speed = idx / elapsed if elapsed > 0 else 0
@@ -1408,17 +1432,33 @@ def batch_tts_all_projects(
 
 
 def _play_completion_sound():
-    """Проигрывает звук завершения в скрытом HTML-элементе, только если синтез завершился успешно."""
-    sound_html = ""
-    if _synthesis_completed:
+    """Гарантированно проигрывает ЛЮБОЙ доступный звук завершения (base64 data-URI)."""
+    import base64, time
+    events_dir = sound_dir / "events"
+    wav = None
+    try:
         cfg = AppConfig.load_user_settings()
-        complete_path = sound_dir / "events" / cfg.completion_sound
-        try:
-            src = complete_path.relative_to(now_dir).as_posix()
-        except ValueError:
-            src = str(complete_path)
-        sound_html = f'<audio autoplay src="file/{src}"></audio>'
-    return gr.update(value=sound_html)
+        chosen = events_dir / cfg.completion_sound
+        if chosen.exists():
+            wav = chosen
+    except Exception:
+        pass
+    if wav is None:
+        wavs = sorted(events_dir.glob("*.wav")) + sorted(events_dir.glob("*.mp3"))
+        wav = wavs[0] if wavs else None
+    if wav is None:
+        return gr.update(value="")
+    try:
+        b64 = base64.b64encode(wav.read_bytes()).decode("ascii")
+    except Exception:
+        return gr.update(value="")
+    mime = "audio/mpeg" if wav.suffix.lower() == ".mp3" else "audio/wav"
+    key = int(time.time() * 1000)
+    html = (
+        f'<audio autoplay src="data:{mime};base64,{b64}"></audio>'
+        f'<span style="display:none">{key}</span>'
+    )
+    return gr.update(value=html)
 
 
 def change_tts_model(mver):
