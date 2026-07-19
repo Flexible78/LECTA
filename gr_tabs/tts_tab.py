@@ -852,11 +852,11 @@ def create_selected_zip_archive(ab_path, selected_filenames, file_index):
 # ── ХЕЛПЕРЫ ДЛЯ ФИКСА B: чекбоксы, массовые операции ──
 
 def get_file_checkbox_choices(ab_name, df_output=None):
-    """Возвращает список имён mp3-файлов для CheckboxGroup."""
+    """Возвращает список имён mp3-файлов для CheckboxGroup (со сбросом выбора)."""
     if df_output is not None:
-        return gr.update(choices=[row[0] for row in df_output])
+        return gr.update(choices=[row[0] for row in df_output], value=[])
     files = get_files_list(ab_name)
-    return gr.update(choices=[row[0] for row in files])
+    return gr.update(choices=[row[0] for row in files], value=[])
 
 
 def select_all_files(ab_name, df_output=None):
@@ -942,7 +942,7 @@ def download_selected_files_zip(ab_name, selected_filenames, file_index):
 
 def download_current_file(file_path):
     """Скачать выбранный mp3-файл."""
-    if not file_path or not Path(file_path).exists():
+    if not file_path or not Path(file_path).is_file():
         raise gr.Error("Файл не найден!")
     return gr.update(value=file_path)
 
