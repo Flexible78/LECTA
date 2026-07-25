@@ -15,7 +15,7 @@ def stop_model_update():
     """Устанавливает флаг остановки — update_all_voice_models() проверяет его после каждой модели."""
     global _stop_model_update
     _stop_model_update = True
-    return "🛑 Остановка после текущей модели..."
+    return "🛑 Stopping after the current model..."
 
 # Высчитываем корневую директорию (fb2tts/) относительно папки libs/
 CURRENT_DIR = Path(__file__).resolve().parent.parent
@@ -30,7 +30,7 @@ VOICE_MODELS_REGISTRY = [
         ("https://myfreenet.ru/models/vosk-model-tts-ru-0.10-multi.zip",
          "vosk-model-tts-ru-0.10-multi.zip"),
     ]),
-    ("silero_ru", "Silero v5_5 (Русский, 5 голосов)", [
+    ("silero_ru", "Silero v5_5 (Russian, 5 voices)", [
         ("https://models.silero.ai/models/tts/ru/v5_5_ru.pt", "silero/v5_5_ru.pt"),
     ]),
     ("silero_cis", "Silero v5_cis (60 голосов)", [
@@ -48,13 +48,13 @@ VOICE_MODELS_REGISTRY = [
         ("https://huggingface.co/ESpeech/ESpeech-TTS-1_RL-V2/resolve/main/espeech_tts_rlv2.pt",
          "ESpeech-TTS-1_RL-V2/espeech_tts_rlv2.pt"),
     ]),
-    ("vocos", "Vocoder Vocos-mel-24khz (для F5-TTS)", [
+    ("vocos", "Vocoder Vocos-mel-24khz (for F5-TTS)", [
         ("https://huggingface.co/charactr/vocos-mel-24khz/resolve/main/pytorch_model.bin",
          "vocos-mel-24khz/pytorch_model.bin"),
         ("https://huggingface.co/charactr/vocos-mel-24khz/resolve/main/config.yaml",
          "vocos-mel-24khz/config.yaml"),
     ]),
-    ("silero_stress", "Silero Stress (ударения)", [
+    ("silero_stress", "Silero Stress (stress marks)", [
         ("https://github.com/snakers4/silero-stress/raw/refs/heads/master/src/silero_stress/data/accentor.pt",
          "silero_stress/accentor.pt"),
     ]),
@@ -74,7 +74,7 @@ OLD_FILES_CLEANUP = {
 
 def clean_tmp_folder():
     tmp_dir = CURRENT_DIR / "tmp"
-    if not tmp_dir.exists(): return "Папка tmp чиста."
+    if not tmp_dir.exists(): return "The tmp folder is already clean."
     
     deleted_size, deleted_count = 0, 0
     for item in tmp_dir.iterdir():
@@ -90,10 +90,10 @@ def clean_tmp_folder():
                 shutil.rmtree(item)
                 deleted_count += 1
         except Exception as e:
-            logger.error(f"Ошибка очистки: {e}")
+            logger.error(f"Cleanup error: {e}")
             
     mb_freed = deleted_size / (1024 * 1024)
-    return f"✅ Очищено {deleted_count} элементов. Освобождено {mb_freed:.2f} МБ."
+    return f"✅ Cleaned {deleted_count} items. Freed {mb_freed:.2f} MB."
 
 def get_installed_models():
     models_dir = CURRENT_DIR / "models"
@@ -101,15 +101,15 @@ def get_installed_models():
     return sorted([item.name for item in models_dir.iterdir()])
 
 def delete_selected_model(model_name):
-    if not model_name: return gr.update(), "⚠️ Модель не выбрана"
+    if not model_name: return gr.update(), "⚠️ No model selected"
     target_path = CURRENT_DIR / "models" / model_name
-    if not target_path.exists(): return gr.update(choices=get_installed_models()), "⚠️ Путь не найден!"
+    if not target_path.exists(): return gr.update(choices=get_installed_models()), "⚠️ Path not found!"
     try:
         if target_path.is_dir(): shutil.rmtree(target_path)
         else: target_path.unlink()
-        return gr.update(choices=get_installed_models(), value=""), f"✅ Удалено: {model_name}"
+        return gr.update(choices=get_installed_models(), value=""), f"✅ Deleted: {model_name}"
     except Exception as e: 
-        return gr.update(choices=get_installed_models()), f"❌ Ошибка: {e}"
+        return gr.update(choices=get_installed_models()), f"❌ Error: {e}"
 
 # =============================================================================
 # ОБНОВЛЕНИЕ / СКАЧИВАНИЕ ГОЛОСОВЫХ МОДЕЛЕЙ
@@ -119,10 +119,10 @@ def _format_size(size_bytes):
     if size_bytes <= 0:
         return "?"
     if size_bytes < 1024 * 1024:
-        return f"{size_bytes / 1024:.0f} КБ"
+        return f"{size_bytes / 1024:.0f} KB"
     if size_bytes < 1024 * 1024 * 1024:
-        return f"{size_bytes / (1024 * 1024):.1f} МБ"
-    return f"{size_bytes / (1024 * 1024 * 1024):.2f} ГБ"
+        return f"{size_bytes / (1024 * 1024):.1f} MB"
+    return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
 
 def _get_file_size(url, local_path):
     """Возвращает размер файла в байтах: с диска если установлен, иначе из HTTP content-length.
@@ -201,11 +201,11 @@ def quick_check_models_local():
             missing_list.append(m_name)
     total = len(VOICE_MODELS_REGISTRY)
     if not missing_list:
-        return f"✅ Все {total} голосовых моделей установлены!"
-    result = f"⚠️ Установлено: {len(installed_list)}/{total} | Отсутствует: {len(missing_list)}\n\n"
-    result += "Отсутствующие модели:\n"
+        return f"✅ All {total} voice models are installed!"
+    result = f"⚠️ Installed: {len(installed_list)}/{total} | Missing: {len(missing_list)}\n\n"
+    result += "Missing models:\n"
     result += "\n".join(f"  ❌ {name}" for name in missing_list)
-    result += "\n\n💡 Нажмите «⬇️⬇️ Обновить ВСЕ модели» чтобы скачать отсутствующие."
+    result += "\n\n💡 Click «⬇️⬇️ Update ALL models» to download the missing ones."
     return result
 
 def check_voice_model_status(model_id):
@@ -233,7 +233,7 @@ def update_voice_model(model_id):
     Возвращает (строка_статус, размер_в_байтах).
     размер_в_байтах — сумма размеров всех файлов модели (0 если не удалось определить)."""
     if not model_id:
-        return "⚠️ Выберите модель для обновления", 0
+        return "⚠️ Select a model to update", 0
 
     target = None
     for m_id, m_name, files in VOICE_MODELS_REGISTRY:
@@ -241,7 +241,7 @@ def update_voice_model(model_id):
             target = (m_name, files)
             break
     if target is None:
-        return f"❌ Модель {model_id} не найдена в реестре", 0
+        return f"❌ Model {model_id} not found in the registry", 0
 
     m_name, files = target
     results = []
@@ -257,22 +257,22 @@ def update_voice_model(model_id):
 
         # Если файл уже есть — пропускаем (не перезаписываем без необходимости)
         if local_path.exists():
-            results.append(f"✅ {rel_path} — уже установлен ({size_str})")
+            results.append(f"✅ {rel_path} — already installed ({size_str})")
             continue
         # Vosk zip: проверяем распакованную папку
         if rel_path.endswith('.zip'):
             extracted_dir = CURRENT_DIR / "models" / Path(rel_path).stem
             if extracted_dir.exists():
-                results.append(f"✅ {rel_path} — уже установлен ({size_str})")
+                results.append(f"✅ {rel_path} — already installed ({size_str})")
                 continue
         try:
             local_path.parent.mkdir(parents=True, exist_ok=True)
             m, status = download_model(url, local_path)
             if m is None:
-                results.append(f"❌ {rel_path} — ошибка: {status}")
+                results.append(f"❌ {rel_path} — error: {status}")
                 all_ok = False
             else:
-                results.append(f"⬇️ {rel_path} — скачан успешно ({size_str})")
+                results.append(f"⬇️ {rel_path} — downloaded successfully ({size_str})")
         except Exception as e:
             results.append(f"❌ {rel_path} — {e}")
             all_ok = False
@@ -286,9 +286,9 @@ def update_voice_model(model_id):
                 with ZipFile(str(zip_path), "r") as zf:
                     zf.extractall(str(CURRENT_DIR / "models"))
                 zip_path.unlink(missing_ok=True)
-                results.append("📦 Архив распакован")
+                results.append("📦 Archive unpacked")
         except Exception as e:
-            results.append(f"⚠️ Ошибка распаковки: {e}")
+            results.append(f"⚠️ Unpack error: {e}")
 
     # Авто-удаление старых версий файлов после успешного обновления
     if all_ok and model_id in OLD_FILES_CLEANUP:
@@ -298,9 +298,9 @@ def update_voice_model(model_id):
                 try:
                     old_size = old_path.stat().st_size
                     old_path.unlink()
-                    results.append(f"🗑 Удалена старая версия: {old_rel_path} ({_format_size(old_size)})")
+                    results.append(f"🗑 Removed old version: {old_rel_path} ({_format_size(old_size)})")
                 except Exception as e:
-                    results.append(f"⚠️ Не удалось удалить старую версию {old_rel_path}: {e}")
+                    results.append(f"⚠️ Could not remove old version {old_rel_path}: {e}")
 
     header = f"{'✅' if all_ok else '⚠️'} {m_name} ({_format_size(model_total_bytes)}):\n"
     return header + "\n".join(results), model_total_bytes
@@ -319,7 +319,7 @@ def update_all_voice_models():
     total_bytes = 0
 
     # Первый yield — мгновенный отклик, чтобы UI не выглядел зависшим
-    yield f"📦 Начинаю обновление {total} моделей...\n⏳ Определение размеров файлов...\n\n"
+    yield f"📦 Starting update of {total} models...\n⏳ Determining file sizes...\n\n"
 
     for i, (m_id, m_name, _) in enumerate(VOICE_MODELS_REGISTRY, 1):
         # Проверка флага остановки
@@ -327,9 +327,9 @@ def update_all_voice_models():
             _stop_model_update = False  # Сбрасываем для следующего запуска
             stop_line = (
                 f"\n\n{'═' * 40}"
-                f"\n🛑 Остановлено пользователем!"
-                f"\n📊 Обработано: {i-1}/{total} моделей | ✅ {ok_count} актуальны"
-                f"\n💾 Общий объём: {_format_size(total_bytes)}"
+                f"\n🛑 Stopped by the user!"
+                f"\n📊 Processed: {i-1}/{total} models | ✅ {ok_count} up to date"
+                f"\n💾 Total size: {_format_size(total_bytes)}"
             )
             yield "\n\n".join(all_results) + stop_line
             return
@@ -343,15 +343,15 @@ def update_all_voice_models():
         # Живой прогресс: показываем накопленный лог + счётчик + общий объём
         progress_line = (
             f"\n\n{'─' * 40}"
-            f"\n📊 Прогресс: {i}/{total} моделей | ✅ {ok_count} актуальны"
-            f"\n💾 Общий объём: {_format_size(total_bytes)}"
+            f"\n📊 Progress: {i}/{total} models | ✅ {ok_count} up to date"
+            f"\n💾 Total size: {_format_size(total_bytes)}"
         )
         yield "\n\n".join(all_results) + progress_line
 
     summary = (
         f"\n\n═══════════════════"
-        f"\n🎉 Готово: {ok_count}/{total} моделей актуальны"
-        f"\n💾 Общий объём всех моделей: {_format_size(total_bytes)}"
+        f"\n🎉 Done: {ok_count}/{total} models are up to date"
+        f"\n💾 Total size of all models: {_format_size(total_bytes)}"
     )
     yield "\n\n".join(all_results) + summary
 
@@ -367,7 +367,7 @@ def check_all_voice_models():
     missing_bytes = 0
 
     # Первый yield — мгновенный отклик
-    yield f"🔍 Проверка {total} голосовых моделей...\n⏳ Проверка установленных файлов и размеров отсутствующих...\n\n"
+    yield f"🔍 Checking {total} voice models...\n⏳ Checking installed files and sizes of missing ones...\n\n"
 
     for i, (m_id, m_name, files) in enumerate(VOICE_MODELS_REGISTRY, 1):
         lines = []
@@ -388,10 +388,10 @@ def check_all_voice_models():
             size_str = _format_size(file_size)
 
             if is_installed:
-                lines.append(f"  ✅ {rel_path} — установлен ({size_str})")
+                lines.append(f"  ✅ {rel_path} — installed ({size_str})")
                 model_installed_bytes += file_size
             else:
-                lines.append(f"  ❌ {rel_path} — отсутствует (нужно скачать {size_str})")
+                lines.append(f"  ❌ {rel_path} — missing (need to download {size_str})")
                 model_missing_bytes += file_size
                 model_installed = False
 
@@ -408,35 +408,35 @@ def check_all_voice_models():
         model_total = model_installed_bytes + model_missing_bytes
         header = f"{status_icon} {m_name} ({_format_size(model_total)})"
         if not model_installed:
-            header += f" — нужно скачать {_format_size(model_missing_bytes)}"
+            header += f" — need to download {_format_size(model_missing_bytes)}"
 
         all_results.append(f"─── [{i}/{total}] {header} ───\n" + "\n".join(lines))
 
         # Живой прогресс после каждой модели
         # «0 Б» если действительно ничего, иначе форматированный размер ("?" если размер неизвестен)
-        installed_size_str = "0 Б" if installed_bytes == 0 else _format_size(installed_bytes)
-        missing_size_str = "0 Б" if missing_bytes == 0 else _format_size(missing_bytes)
+        installed_size_str = "0 B" if installed_bytes == 0 else _format_size(installed_bytes)
+        missing_size_str = "0 B" if missing_bytes == 0 else _format_size(missing_bytes)
         progress_line = (
             f"\n\n{'─' * 40}"
-            f"\n📊 Проверено: {i}/{total} | ✅ {installed_count} установлено | ❌ {missing_count} отсутствует"
-            f"\n💾 На диске: {installed_size_str} | Нужно скачать: {missing_size_str}"
+            f"\n📊 Checked: {i}/{total} | ✅ {installed_count} installed | ❌ {missing_count} missing"
+            f"\n💾 On disk: {installed_size_str} | Need to download: {missing_size_str}"
         )
         yield "\n\n".join(all_results) + progress_line
 
     # Финальная сводка
-    installed_size_str = "0 Б" if installed_bytes == 0 else _format_size(installed_bytes)
+    installed_size_str = "0 B" if installed_bytes == 0 else _format_size(installed_bytes)
     summary = (
         f"\n\n═══════════════════"
-        f"\n🔍 Проверка завершена!"
-        f"\n✅ Установлено: {installed_count}/{total} моделей ({installed_size_str} на диске)"
+        f"\n🔍 Check complete!"
+        f"\n✅ Installed: {installed_count}/{total} models ({installed_size_str} on disk)"
     )
     if missing_count > 0:
-        missing_size_str = "0 Б" if missing_bytes == 0 else _format_size(missing_bytes)
+        missing_size_str = "0 B" if missing_bytes == 0 else _format_size(missing_bytes)
         summary += (
-            f"\n❌ Отсутствует: {missing_count}/{total} моделей"
-            f"\n⬇️ Нужно скачать: {missing_size_str}"
-            f"\n\n💡 Нажмите «⬇️⬇️ Обновить ВСЕ модели» чтобы скачать отсутствующие."
+            f"\n❌ Missing: {missing_count}/{total} models"
+            f"\n⬇️ Need to download: {missing_size_str}"
+            f"\n\n💡 Click «⬇️⬇️ Update ALL models» to download the missing ones."
         )
     else:
-        summary += "\n\n🎉 Все модели актуальны! Ничего скачивать не нужно."
+        summary += "\n\n🎉 All models are up to date! Nothing to download."
     yield "\n\n".join(all_results) + summary
