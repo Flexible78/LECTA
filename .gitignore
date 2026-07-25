@@ -1,4 +1,3 @@
-@'
 # ---- Python ----
 __pycache__/
 *.py[cod]
@@ -6,14 +5,15 @@ __pycache__/
 .venv/
 venv/
 env/
+app.pyOLD
 
-# ---- Портативные бинарники (не для git) ----
+# ---- Portable binaries (not for git) ----
 /python/
 /git/
 /ffmpeg/
 /pip/
 
-# ---- ML-модели (большие, качаются отдельно) ----
+# ---- ML models (large, downloaded separately) ----
 models/
 *.pt
 *.pth
@@ -23,7 +23,7 @@ models/
 *.safetensors
 speakers_data.pt
 
-# ---- Данные, проекты и аудио ----
+# ---- Data, projects and audio ----
 backup/
 data/
 data/tts_cache/
@@ -35,15 +35,17 @@ tmp/
 *.ogg
 *.flac
 *.m4a
+20260.md
 
-# ---- Логи и локальное состояние ----
+# ---- Logs and local state ----
 *.log
 tts.db
 *.sqlite
 *.sqlite3
 tts_ui_settings.json
+tree.txt
 
-# ---- СЕКРЕТЫ (никогда в git!) ----
+# ---- Secrets (never in git!) ----
 .env
 .env.*
 *secret*
@@ -54,11 +56,11 @@ client_secret*.json
 *.pem
 *.key
 
-# ---- IDE / OS ----
+# ---- IDE and OS ----
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
 nul
 repomix-output.*
-'@ | Set-Content -Encoding UTF8 .gitignore
+*.bundle
