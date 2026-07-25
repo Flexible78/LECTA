@@ -1,103 +1,138 @@
-- [ ] fb2tts
-Для преобразования текста в речь использутся [Vosk TTS](https://github.com/alphacep/vosk-tts), [Silero](https://github.com/snakers4/silero-models) и [F5-TTS](https://github.com/SWivid/F5-TTS). Для F5-TTS используются модели от [Misha24-10](https://huggingface.co/Misha24-10/F5-TTS_RUSSIAN/tree/main/F5TTS_v1_Base_v4_winter) и [ESpeech](https://huggingface.co/ESpeech/ESpeech-TTS-1_RL-V2/tree/main)
-Для расстановки ударений можно использовать [Ruaccent](https://gitverse.ru/Den4ikAI/ruaccent) или [Silero Stress](https://github.com/snakers4/silero-stress)
+# LECTA
 
-### Установка и использование
+**Text-to-speech for Russian, English and Hebrew.**
 
-<details>
-<summary><b>Для Windows</b></summary>
+> *KATAV writes, LECTA reads.* — [KATAV](https://github.com/Flexible78/KATAV) is the companion speech-to-text tool.
 
-#### ✅ Требования
+LECTA turns books, articles and pasted text into natural-sounding audiobooks.
+It routes each sentence to the best available engine based on its language,
+mixing local neural TTS with cloud voices in a single output file.
 
-- Windows 10 или 11 (с установленным `winget`)
-- Интернет-подключение
+---
 
-> `winget` входит в состав Windows 10/11 по умолчанию (обновления 21H1 и новее)
+## Acknowledgements
 
-#### 1. Установка необходимых компонентов
+LECTA is built on [fb2tts](https://gitverse.ru/diger/fb2tts) by diger.
+This fork adds multilingual routing for Russian, English and Hebrew,
+Edge cloud voices, a vocabulary tab and batch synthesis.
 
-Откройте **командную строку (CMD) или PowerShell от имени администратора** и выполните следующую команду:
+Third-party engines and models:
 
-```cmd
-winget install Git.Git Python.Python.3.11
-```
+| Component | Source |
+|-----------|--------|
+| [Vosk TTS](https://github.com/alphacep/vosk-tts) | Alpha Cephei |
+| [Silero](https://github.com/snakers4/silero-models) | Silero |
+| [F5-TTS](https://github.com/SWivid/F5-TTS) | SWivid |
+| F5-TTS model weights — [Misha24-10](https://huggingface.co/Misha24-10/F5-TTS_RUSSIAN) | Misha24-10 |
+| F5-TTS model weights — [ESpeech](https://huggingface.co/ESpeech/ESpeech-TTS-1_RL-V2) | ESpeech |
+| [RuAccent](https://gitverse.ru/Den4ikAI/ruaccent) | Den4ikAI |
+| [Silero Stress](https://github.com/snakers4/silero-stress) | Silero |
+| [Gradio](https://gradio.app) | Gradio |
 
-После установки перезапустите командную строку, чтобы обновить PATH.  
-Проверьте установку:
+See [NOTICE.md](NOTICE.md) for full attribution and licensing notes.
 
-```cmd
-python -V
-git --version
-```
+---
 
-#### 2. Скачайте проект
+## Features
 
-```cmd
-git clone https://gitverse.ru/diger/fb2tts.git
-cd fb2tts
-```
+- **Multilingual routing** — automatically detects Russian, English and Hebrew in the same text and sends each segment to the appropriate engine.
+- **Edge cloud voices** — instant generation via Microsoft Edge TTS for all three languages (requires internet; recommended for Hebrew, which has no local backend).
+- **Local backends** — Vosk TTS (56 Russian voices), Silero (Russian + English), F5-TTS (high-quality neural Russian via Misha24-10 and ESpeech models).
+- **FB2 and document parsing** — load FB2, PDF, DOCX, EPUB, RTF, HTML, TXT, Markdown, JSON and CSV. Articles can be fetched directly from a URL.
+- **Vocabulary tab** — extract unique words from a text, translate them via Google Translate, and build a pronunciation dictionary.
+- **Batch synthesis** — process all projects in one run with a two-level progress bar, per-project download and a ZIP of all results.
+- **Stress placement** — RuAccent or Silero Stress for correct Russian word stress.
+- **Custom sounds** — insert event sounds, pauses and background music at specific text markers.
 
-#### 3. Установите зависимости Python
+---
 
-```cmd
+## Quick start
+
+```bash
+git clone https://github.com/Flexible78/LECTA.git
+cd LECTA
+python -m venv venv
+source venv/bin/activate        # Windows: venv\Scripts\activate
 pip install -r requirements.txt
-```
-
-#### 4. Запустите программу
-
-```cmd
 python app.py
 ```
 
-Перейдите в браузере по адресу: http://localhost:7860
-</details>
+Then open **http://localhost:7860** in your browser.
+
+Voice models are downloaded from the **System & Cleanup** tab inside the app — no manual download needed for the standard set.
+
+---
+
+## Requirements
+
+- **OS:** Windows 10/11 (primary), Linux (Ubuntu/Debian)
+- **Python:** 3.11 or newer
+- **ffmpeg:** required by `pydub` / `librosa` for audio processing
+- **GPU (optional):** CUDA-capable GPU with ≥ 6 GB VRAM for local neural TTS. Falls back to CPU automatically.
+
+---
+
+## Troubleshooting
+
 <details>
-<summary><b>Для Linux (Ubuntu/Debian)</b></summary>
+<summary><b>Model folder not found</b></summary>
 
-#### 1. Обновите пакеты и установите зависимости:
+If the app reports that voice models are missing:
 
-```bash
-sudo apt update && sudo apt upgrade -y
-sudo apt install python3 python3-pip git ffmpeg -y
-```
+1. Set `LECTA_MODELS_DIR` to the folder containing your models:
+   ```bash
+   export LECTA_MODELS_DIR=/path/to/models
+   ```
+2. Or check the settings file (`user_settings.json`) for a custom path.
+3. Or place a `models/` folder next to the LECTA application.
 
-#### 2. Клонируйте репозиторий:
-
-```bash
-git clone https://github.com/diger/fb2tts.git
-cd fb2tts
-```
-
-#### 3. Создайте виртуальное окружение и установите зависимости:  
-
-```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-```
-
-#### 4. Запустите сервер:  
-
-```bash
-python3 app.py
-```
-
-Перейдите в браузере по адресу: http://localhost:7860
-
+You can also download models from the **System & Cleanup → Update / download voice models** tab.
 </details>
 
-### Слушаем примеры преобразования  
-На стартовой странице можно прослушать примеры генерации голоса.  
-![DemoTTS](https://raw.githubusercontent.com/diger/diger.github.io/refs/heads/master/screenshots/demotts.png)
+<details>
+<summary><b>Port already in use</b></summary>
 
-### Задаём обложку аудиокниги  
-По-умолчанию выбирается обложка из fb2 файла. Можно установить свою картинку и создать подпись на ней.  
-![Back](https://raw.githubusercontent.com/diger/diger.github.io/refs/heads/master/screenshots/back.png)
+If the Gradio UI cannot start because port 7860 is occupied:
 
-### Парсим fb2 файл  
-Исходный fb2 файл разбивается либо по главам, либо по размеру. Также есть возможность задать произвольный тег.
-Можно поправить обработанные файлы, например изменить ударение в словах.  
-![Parse](https://raw.githubusercontent.com/diger/diger.github.io/refs/heads/master/screenshots/parse.png)
+```bash
+export LECTA_PORT=7861
+python app.py
+```
 
-### Примеры озвученных глав из fb2  
-[![Здесь примеры озвученных глав из fb2](https://github.com/diger/fb2tts/blob/main/libs/cover.jpg?raw=true&s=128)](https://samply.app/p/TqhqdbpCC1M30MzkzYmI?si=LF45p07JbyPSMXugaq4ShAI3hg92)
+For the Gemini proxy (`start.py`), use `LECTA_PROXY_PORT` instead:
+
+```bash
+export LECTA_PROXY_PORT=8081
+python start.py
+```
+</details>
+
+---
+
+## Environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LECTA_PORT` | `7860` | Port for the Gradio UI (`app.py`) |
+| `LECTA_PROXY_PORT` | `8080` | Port for the Gemini API proxy (`start.py`) |
+| `LECTA_MODELS_DIR` | `models` | Directory containing voice model files |
+| `LECTA_TTS_WORKERS` | `8` | Number of parallel TTS worker threads |
+
+---
+
+## Tested on
+
+- Windows 11, Python 3.11, CUDA 12.x, ffmpeg N-122401
+- Ubuntu 22.04, Python 3.11, CPU-only
+
+---
+
+## Documentation
+
+- [Setup guide](docs/SETUP.md) — clean-clone installation, model placement, verification
+- [Usage guide](docs/USAGE.md) — end-user guide to all tabs and features
+- [NOTICE.md](NOTICE.md) — attribution and licensing notes
+
+## Author
+
+Alexander Tsyrkin (Flexible78)
