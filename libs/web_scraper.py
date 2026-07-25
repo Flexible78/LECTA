@@ -8,10 +8,10 @@ logger = logging.getLogger(__name__)
 
 def scrape_and_save_article(url, remove_ru):
     if not url or not url.strip():
-        return None, "Пустой URL"
+        return None, "Empty URL"
         
     try:
-        logger.info(f"🌐 Инициализирован парсинг URL: {url.strip()}")
+        logger.info(f"🌐 Started parsing URL: {url.strip()}")
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         response = requests.get(url.strip(), headers=headers, timeout=10)
         response.raise_for_status()
@@ -38,7 +38,7 @@ def scrape_and_save_article(url, remove_ru):
             raw_text = "\n".join([s.strip() for s in raw_text.splitlines() if s.strip()])
         
         if not raw_text.strip():
-            return None, "Текст не найден или был отфильтрован!"
+            return None, "No text found or it was filtered out!"
         
         title = soup.title.string if soup.title else url.split('/')[-1]
         ab_name = re.sub(r'[^a-zA-Z0-9_\-а-яА-Я]', '', title)[:35]
@@ -71,11 +71,11 @@ def scrape_and_save_article(url, remove_ru):
         fb2_template = f"<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<FictionBook xmlns=\"http://www.gribuser.ru/xml/fictionbook/2.0\">\n  <description><title-info><book-title>{ab_name}</book-title></title-info></description>\n  <body>{sections_xml}</body>\n</FictionBook>"
         (ab_path / f"{ab_name}.fb2").write_text(fb2_template, encoding="utf-8")
         
-        logger.info(f"✅ Статья '{ab_name}' успешно скачана и сохранена.")
+        logger.info(f"✅ Article '{ab_name}' downloaded and saved successfully.")
         return ab_name, None
         
     except ImportError:
-        return None, "Установите библиотеки: pip install requests beautifulsoup4"
+        return None, "Install the libraries: pip install requests beautifulsoup4"
     except Exception as e:
-        logger.error(f"Ошибка загрузки URL: {e}")
-        return None, f"Не удалось скачать статью: {e}"
+        logger.error(f"URL fetch error: {e}")
+        return None, f"Failed to download the article: {e}"
