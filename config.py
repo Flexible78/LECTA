@@ -1,4 +1,5 @@
 import json
+import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 import argparse
@@ -33,7 +34,7 @@ class AppConfig:
     bitrate: int = 96
     noise_lvl: int = 16
     use_sound_effect: bool = False
-    models_path: str = 'models'
+    models_path: str = os.getenv("LECTA_MODELS_DIR", "models")
     data_path: str = 'data'
     # Edge TTS cloud flags (сохраняются между перезапусками)
     use_edge_english: bool = False
@@ -45,7 +46,7 @@ class AppConfig:
     @staticmethod
     def parse_args():
         parser = argparse.ArgumentParser(description="Параметры запуска TTS-сервера")
-        parser.add_argument("--port", type=int, default=7860, help="Порт для запуска сервера")
+        parser.add_argument("--port", type=int, default=int(os.getenv("LECTA_PORT", "7860")), help="Порт для запуска сервера")
         parser.add_argument("--share", action="store_true", help="Создать публичную ссылку")
         parser.add_argument("--debug", action="store_true", help="Режим отладки")
         parser.add_argument("--server-name", type=str, default="0.0.0.0", help="Адрес сервера")

@@ -20,7 +20,7 @@ GEMINI_DIR = os.path.expanduser("~/.gemini")          # ~/.gemini (работа�
 TOKEN_FILE_PATH = os.path.join(GEMINI_DIR, "oauth_creds.json")
 GEMINI_CLI_VERSION = "0.40.0"                          # версия для User-Agent
 HOST = "127.0.0.1"
-PORT = 8080
+PORT = int(os.getenv("LECTA_PROXY_PORT", "8080"))
 
 # OAuth client ID/Secret Gemini CLI (одинаковые для всех пользователей,
 # зашиты в бандле Gemini CLI — извлечены из chunk-3OSQ5US4.js)
@@ -493,4 +493,11 @@ if __name__ == "__main__":
     log.info("Лог: %s", LOG_FILE)
     log.info("CLIENT_ID: %s", CLIENT_ID[:30] + "...")
     log.info("Запущен на http://%s:%d", HOST, PORT)
-    uvicorn.run(app, host=HOST, port=PORT)
+    try:
+        uvicorn.run(app, host=HOST, port=PORT)
+    except OSError as e:
+        raise RuntimeError(
+            f"Failed to bind port {PORT}. The port may already be in use. "
+            f"Set LECTA_PROXY_PORT to a free port (e.g. LECTA_PROXY_PORT=8081) and restart. "
+            f"Original error: {e}"
+        ) from e

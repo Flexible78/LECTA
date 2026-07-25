@@ -1,3 +1,4 @@
+import os
 import torch
 import gc
 import numpy as np
@@ -5,6 +6,20 @@ from pathlib import Path
 from libs.utils import download_model, models_path
 from libs.tts.vosk_backend import Model, Synth
 from libs.tts.f5_backend import F5Model, F5Synth
+
+def _model_not_found_hint():
+    """English guidance shown when model files are missing."""
+    try:
+        resolved = str(models_path)
+    except Exception:
+        resolved = os.getenv("LECTA_MODELS_DIR", "models")
+    return (
+        "\n\nModel files not found. To resolve this:\n"
+        "  1) Set LECTA_MODELS_DIR to the folder containing your voice models "
+        f"(current resolved path: '{resolved}'),\n"
+        "  2) Check the models_path value in the settings file,\n"
+        "  3) Or place the 'models' folder next to the LECTA application."
+    )
 
 # ── КАРТА КОРОТКИХ ИМЁН МОДЕЛЕЙ (для отображения в таблице аудио) ──
 # Используется tts_tab.py при сохранении и показе MP3.
@@ -65,6 +80,8 @@ class TTSModel:
                 self.model = Model(model_ver)
                 return ver, "Модель успешно загружена!"
             except Exception as e:
+                if isinstance(e, FileNotFoundError) or "No such file" in str(e):
+                    return None, f"Failed to load model: {e}.{_model_not_found_hint()}"
                 return None, f"Ошибка инициализации: {e}"
         elif ver in [3, 4, 7]:
             # Обновляем устройство при каждой загрузке (пользователь мог переключить GPU/CPU)
@@ -94,6 +111,8 @@ class TTSModel:
                 self.model.to(self.device)
                 return ver, "Модель успешно загружена!"
             except Exception as e:
+                if isinstance(e, FileNotFoundError) or "No such file" in str(e):
+                    return None, f"Failed to load model: {e}.{_model_not_found_hint()}"
                 return None, f"Ошибка загрузки модели: {e}"
         else:
             try:
@@ -101,6 +120,8 @@ class TTSModel:
                 self.model.load(model_ver=ver)
                 return ver, "Модель успешно загружена!"
             except Exception as e:
+                if isinstance(e, FileNotFoundError) or "No such file" in str(e):
+                    return None, f"Failed to load model: {e}.{_model_not_found_hint()}"
                 return None, f"Ошибка инициализации: {e}"
     
     def synth_audio(self, text, speaker_id, speed=1, noise=16, ref_audio=None, ref_text=''):
