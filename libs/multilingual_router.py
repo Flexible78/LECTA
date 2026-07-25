@@ -12,6 +12,8 @@ import re
 from pathlib import Path
 from pydub import AudioSegment
 
+from config import TTS_WORKERS
+
 _TTS_CACHE_DIR = Path(__file__).resolve().parent.parent / 'data' / 'tts_cache'
 _TTS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -215,8 +217,8 @@ def _run_async_safely(coroutine_func, timeout=120):
         return asyncio.run(coroutine_func())
     else:
         if _edge_executor is None:
-            _edge_executor = concurrent.futures.ThreadPoolExecutor(max_workers=8)
-            logger.debug("[EDGE TTS] Executor created (max_workers=8)")
+            _edge_executor = concurrent.futures.ThreadPoolExecutor(max_workers=TTS_WORKERS)
+            logger.debug(f"[EDGE TTS] Executor created (max_workers={TTS_WORKERS})")
         future = _edge_executor.submit(asyncio.run, coroutine_func())
         return future.result(timeout=timeout)
 
@@ -340,7 +342,7 @@ def process_multilingual_text(text, safe_synth_func,
     edge_count = 0
 
     if edge_tasks:
-        n_workers = min(8, len(edge_tasks))
+        n_workers = min(TTS_WORKERS, len(edge_tasks))
         logger.info(f"[ROUTER] {len(edge_tasks)} Edge tasks (workers={n_workers})")
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=n_workers) as executor:

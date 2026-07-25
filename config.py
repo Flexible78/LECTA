@@ -5,6 +5,10 @@ from pathlib import Path
 import argparse
 
 APP_NAME = "TTS-Server"
+
+# Configurable TTS worker thread count. Default 8 (matches the previous hardcoded value).
+# Override with the LECTA_TTS_WORKERS environment variable.
+TTS_WORKERS = int(os.getenv("LECTA_TTS_WORKERS", "8"))
 # Path.home() может вернуть относительный путь (например 'tmp'), если
 # USERPROFILE/appdata заданы как относительные в Start.cmd (портабельная сборка).
 # Разрешаем относительно каталога config.py (fb2tts/), чтобы путь всегда был абсолютным.

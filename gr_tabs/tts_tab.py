@@ -11,7 +11,7 @@ from pathlib import Path
 import gradio as gr
 import libs.multilingual_router as router  # для доступа к флагам USE_EDGE_*
 import numpy as np
-from config import AppConfig, config
+from config import AppConfig, config, TTS_WORKERS
 from libs.accent import accentizer
 from libs.fb2_processor import FB2Processor
 from libs.multilingual_router import process_multilingual_text
@@ -36,7 +36,7 @@ _synthesis_completed = False
 txt_parser = TextParse(False)
 
 # ═══ ПЕРФ: глобальный executor + кэш сегментов (разделяется между проектами) ═══
-_tts_executor = ThreadPoolExecutor(max_workers=8)
+_tts_executor = ThreadPoolExecutor(max_workers=TTS_WORKERS)
 _local_segment_cache = {}
 _local_cache_lock = threading.Lock()
 _local_tts_lock = threading.Lock()  # защита от GPU-конкуренции Silero/F5
