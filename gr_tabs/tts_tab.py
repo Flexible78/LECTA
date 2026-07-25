@@ -358,7 +358,7 @@ def tts(
     if total_lines == 0:
         yield (
             get_files_list(ab_path),
-            "⚠️ Нет строк для озвучки!",
+            "⚠️ No lines to synthesize!",
             get_metrics_html(0, "00:00", "00:00", "0.0"),
             gr.update(),
             {},
@@ -390,8 +390,8 @@ def tts(
 
     yield (
         cached_files_list,
-        "⏳ Инициализация движка...",
-        get_metrics_html(0, "00:00", "Оценка...", "0.0"),
+        "⏳ Initializing engine...",
+        get_metrics_html(0, "00:00", "Estimating...", "0.0"),
         gr.update(),
         _build_file_index(ab_path, cached_files_list),
     )
@@ -427,7 +427,7 @@ def tts(
                 pass
             yield (
                 cached_files_list,
-                f"⏭ Пропуск: {short_final}.mp3 уже существует",
+                f"⏭ Skip: {short_final}.mp3 already exists",
                 get_metrics_html(
                     int((current_line / total_lines) * 100),
                     format_time_hms(time.time() - global_start_time),
@@ -493,9 +493,9 @@ def tts(
                     pct,
                     format_time_hms(elapsed),
                     format_time_hms(rem_sec),
-                    f"{speed:.1f} стр/с",
+                    f"{speed:.1f} lines/s",
                 )
-                log_txt = f"▶ В работе: {file}.xml\n🎙 Озвучка строки: {current_line} из {total_lines}..."
+                log_txt = f"▶ Working: {file}.xml\n🎙 Synthesizing line: {current_line} of {total_lines}..."
                 # НЕ вызываем get_files_list каждые 3 строки — это запускает ffprobe на всех MP3!
                 # Возвращаем кэшированный список вместо [] чтобы таблица не мигала.
                 yield cached_files_list, log_txt, html, gr.update(), _build_file_index(ab_path, cached_files_list)
@@ -602,8 +602,8 @@ def tts(
             total_chunk_time = sum(chunk_timings)
             avg = total_chunk_time / len(chunk_timings)
             max_t = max(chunk_timings)
-            print(f"[PERF] {len(chunk_timings)} чанков синтезировано (всего текстовых задач: {text_task_count})")
-            print(f"[PERF] Среднее время чанка: {avg:.2f}s | Макс: {max_t:.2f}s | Суммарно: {total_chunk_time:.1f}s")
+            print(f"[PERF] {len(chunk_timings)} chunks synthesized (total text tasks: {text_task_count})")
+            print(f"[PERF] Avg chunk time: {avg:.2f}s | Max: {max_t:.2f}s | Total: {total_chunk_time:.1f}s")
 
         # --- O(n) КОНКАТЕНАЦИЯ ВСЕХ СЕГМЕНТОВ (вместо O(n²) через оператор +) ---
         out_audio = _concat_audio_segments(audio_segments)
@@ -665,12 +665,12 @@ def tts(
             pct = int((current_line / total_lines) * 100) if total_lines > 0 else 0
             yield (
                 get_files_list(ab_path),
-                f"🛑 Остановлено! Частичный файл сохранен как {short_final}_PARTIAL.mp3",
+                f"🛑 Stopped! Partial file saved as {short_final}_PARTIAL.mp3",
                 get_metrics_html(
                     pct,
                     format_time_hms(time.time() - global_start_time),
                     "-",
-                    "Остановлено",
+                    "Stopped",
                 ),
                 _safe_audio(last_final_mp3_path),
                 _build_file_index(ab_path, get_files_list(ab_path)),
@@ -682,7 +682,7 @@ def tts(
         # Вывод об обновлении файла (если не прервано)
         yield (
             cached_files_list,
-            f"✅ Сохранен: {short_final}.mp3",
+            f"✅ Saved: {short_final}.mp3",
             get_metrics_html(
                 int((current_line / total_lines) * 100),
                 format_time_hms(time.time() - global_start_time),
@@ -698,10 +698,10 @@ def tts(
 
     # ФИНАЛ
     _synthesis_completed = True
-    gr.Info("Готово")
+    gr.Info("Done")
     yield (
         cached_files_list,
-        "🎉 ВСЕ ФАЙЛЫ УСПЕШНО ОЗВУЧЕНЫ!",
+        "🎉 ALL FILES SUCCESSFULLY SYNTHESIZED!",
         get_metrics_html(
             100, format_time_hms(time.time() - global_start_time), "00:00", "-"
         ),
@@ -742,12 +742,12 @@ def get_files_list(ab_name):
             size_in_mb = round(file_path.stat().st_size / (1024 * 1024), 2)
             file_key = file_path.stem
             elapsed = parse_times.get(file_key, 0)
-            ptime_str = format_audio_time(elapsed) if elapsed > 0 else "Н/Д"
+            ptime_str = format_audio_time(elapsed) if elapsed > 0 else "N/A"
             # Короткое имя модели (из карты) или '?'
             model_label = model_map.get(file_key, "?")
             # Частичные файлы помечаем в колонке обработки
             if "_PARTIAL" in file_path.name:
-                ptime_str = "прервано"
+                ptime_str = "interrupted"
             rows.append(
                 [
                     file_path.name,
@@ -765,7 +765,7 @@ def create_zip_archive(ab_path, file_index):
     Если индекс пуст — fallback на сканирование папки текущего проекта."""
     # ⚠️ Предупреждение: синтез не завершён — архив может быть неполным
     if not _synthesis_completed:
-        gr.Warning("⚠️ Синтез ещё не завершён! Архив может быть неполным.")
+        gr.Warning("⚠️ Synthesis not finished yet! The archive may be incomplete.")
 
     mp3_files = []
     if file_index:
@@ -776,10 +776,10 @@ def create_zip_archive(ab_path, file_index):
     else:
         mp3_dir = data_path / ab_path / "mp3"
         if not mp3_dir.exists():
-            raise gr.Error(f"Папка с файлами не найдена!")
+            raise gr.Error(f"Files folder not found!")
         mp3_files = sorted(mp3_dir.glob("*.mp3"))
     if not mp3_files:
-        raise gr.Error("В папке нет MP3-файлов!")
+        raise gr.Error("No MP3 files in the folder!")
 
     with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
         zip_filename = tmp.name
@@ -800,25 +800,25 @@ def create_zip_archive(ab_path, file_index):
                 added += 1
 
         total_found = len(mp3_files)
-        print(f"В архив добавлено {added} файлов из {total_found} найденных")
+        print(f"Added {added} files to archive out of {total_found} found")
         if added != total_found:
-            gr.Warning(f"⚠️ Расхождение: {added} в архиве vs {total_found} на диске!")
+            gr.Warning(f"⚠️ Mismatch: {added} in archive vs {total_found} on disk!")
 
         return gr.update(visible=True, value=zip_filename)
     except Exception as e:
         if Path(zip_filename).exists():
             Path(zip_filename).unlink()
-        raise gr.Error(f"Ошибка: {str(e)}")
+        raise gr.Error(f"Error: {str(e)}")
 
 
 def create_selected_zip_archive(ab_path, selected_filenames, file_index):
     """Упаковывает ТОЛЬКО выбранные файлы в zip, используя индекс для резолва путей."""
     # ⚠️ Предупреждение: синтез не завершён — архив может быть неполным
     if not _synthesis_completed:
-        gr.Warning("⚠️ Синтез ещё не завершён! Архив может быть неполным.")
+        gr.Warning("⚠️ Synthesis not finished yet! The archive may be incomplete.")
 
     if not selected_filenames:
-        raise gr.Error("Не выбрано ни одного файла!")
+        raise gr.Error("No files selected!")
 
     with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
         zip_filename = tmp.name
@@ -829,7 +829,7 @@ def create_selected_zip_archive(ab_path, selected_filenames, file_index):
             for fname in selected_filenames:
                 _, file_path = _resolve_path(fname, ab_path, file_index)
                 if not file_path.exists():
-                    gr.Warning(f"Файл не найден на диске: {fname} — пропущен")
+                    gr.Warning(f"File not found on disk: {fname} — skipped")
                     continue
                 arcname = fname
                 if arcname in seen_names:
@@ -841,12 +841,12 @@ def create_selected_zip_archive(ab_path, selected_filenames, file_index):
                 zipf.write(str(file_path), arcname)
                 added += 1
 
-        print(f"В архив добавлено {added} файлов из {len(selected_filenames)} выбранных")
+        print(f"Added {added} files to archive out of {len(selected_filenames)} selected")
         return gr.update(visible=True, value=zip_filename)
     except Exception as e:
         if Path(zip_filename).exists():
             Path(zip_filename).unlink()
-        raise gr.Error(f"Ошибка: {str(e)}")
+        raise gr.Error(f"Error: {str(e)}")
 
 
 # ── ХЕЛПЕРЫ ДЛЯ ФИКСА B: чекбоксы, массовые операции ──
@@ -876,17 +876,17 @@ def delete_selected_files(selected_filenames, ab_name, confirm_state, file_index
     """Удаляет выбранные файлы с диска и возвращает обновлённую таблицу.
     Двухкликовое подтверждение: первый клик — предупреждение, второй — удаление."""
     if not selected_filenames:
-        gr.Warning("Не выбрано ни одного файла!")
+        gr.Warning("No files selected!")
         return df_output, gr.update(), "idle", gr.update(), file_index
 
     if confirm_state != "confirm":
         files_str = ", ".join(selected_filenames[:5])
         if len(selected_filenames) > 5:
-            files_str += f" ... и ещё {len(selected_filenames) - 5}"
-        gr.Warning(f"⚠️ Будут удалены: {files_str}. Нажмите ещё раз для подтверждения.")
+            files_str += f" ... and {len(selected_filenames) - 5} more"
+        gr.Warning(f"⚠️ Will be deleted: {files_str}. Click again to confirm.")
         return (
             gr.update(),
-            gr.update(value="⚠️ Подтвердить удаление"),
+            gr.update(value="⚠️ Confirm deletion"),
             "confirm",
             gr.update(),
             file_index,
@@ -912,7 +912,7 @@ def delete_selected_files(selected_filenames, ab_name, confirm_state, file_index
                     except Exception:
                         pass
             except Exception as e:
-                gr.Warning(f"Ошибка удаления {fname}: {e}")
+                gr.Warning(f"Delete error {fname}: {e}")
                 errors += 1
 
     # Удаляем записи из индекса
@@ -923,10 +923,10 @@ def delete_selected_files(selected_filenames, ab_name, confirm_state, file_index
     new_df = [row for row in (df_output or []) if row[0] not in selected_filenames]
     new_choices = gr.update(choices=[row[0] for row in new_df])
 
-    gr.Info(f"🗑 Удалено {deleted} файлов" + (f", ошибок: {errors}" if errors else ""))
+    gr.Info(f"🗑 Deleted {deleted} files" + (f", errors: {errors}" if errors else ""))
     return (
         new_df,
-        gr.update(value="🗑 Удалить выбранные"),
+        gr.update(value="🗑 Delete selected"),
         "idle",
         new_choices,
         file_index,
@@ -936,14 +936,14 @@ def delete_selected_files(selected_filenames, ab_name, confirm_state, file_index
 def download_selected_files_zip(ab_name, selected_filenames, file_index):
     """Создаёт zip из выбранных файлов (через create_selected_zip_archive)."""
     if not selected_filenames:
-        raise gr.Error("Не выбрано ни одного файла!")
+        raise gr.Error("No files selected!")
     return create_selected_zip_archive(ab_name, selected_filenames, file_index)
 
 
 def download_current_file(file_path):
     """Скачать выбранный mp3-файл."""
     if not file_path or not Path(file_path).is_file():
-        raise gr.Error("Файл не найден!")
+        raise gr.Error("File not found!")
     return gr.update(value=file_path)
 
 
@@ -968,7 +968,7 @@ def del_file(filename, ab_name, file_index, df_output):
     if file_path.exists():
         try:
             file_path.unlink()
-            gr.Info(f"Удален файл {file_path.name}", duration=2)
+            gr.Info(f"Deleted file {file_path.name}", duration=2)
             # Чистим запись о модели в РЕАЛЬНОМ проекте файла
             proj = _project_from_path(file_path) or str(ab_name)
             model_map = _load_model_map(proj)
@@ -981,7 +981,7 @@ def del_file(filename, ab_name, file_index, df_output):
                 except Exception:
                     pass
         except Exception as e:
-            gr.Warning(f"Ошибка удаления: {e}")
+            gr.Warning(f"Delete error: {e}")
     # Удаляем запись из индекса
     if file_index and display_name and display_name in file_index:
         del file_index[display_name]
@@ -993,7 +993,7 @@ def sel_file(data: gr.SelectData, ab_path, file_index):
     # Имя файла теперь чистый текст (колонка 0)
     filename_raw = data.row_value[0]
     if not filename_raw or not str(filename_raw).endswith(".mp3"):
-        gr.Warning("Не удалось определить имя файла из строки таблицы")
+        gr.Warning("Could not determine file name from table row")
         return gr.update(), "", gr.update(), gr.update(), gr.update(), gr.update()
     _, selected_path = _resolve_path(filename_raw, ab_path, file_index)
     stem_name = selected_path.stem
@@ -1012,7 +1012,7 @@ def rename_selected_file(current_path, new_name, ab_path, file_index, df_output)
         return df_output, gr.update(visible=False), file_index
     old_path = Path(current_path)
     if not old_path.exists():
-        gr.Warning("Файл не найден!")
+        gr.Warning("File not found!")
         return df_output, gr.update(visible=False), file_index
 
     safe_name = "".join(
@@ -1023,7 +1023,7 @@ def rename_selected_file(current_path, new_name, ab_path, file_index, df_output)
     new_path = old_path.parent / f"{safe_name}.mp3"
 
     if new_path.exists() and new_path != old_path:
-        gr.Warning("Файл с таким именем уже существует!")
+        gr.Warning("A file with this name already exists!")
         return df_output, gr.update(), file_index
 
     # Определяем отображаемое имя в индексе
@@ -1036,7 +1036,7 @@ def rename_selected_file(current_path, new_name, ab_path, file_index, df_output)
 
     try:
         old_path.rename(new_path)
-        gr.Info(f"Файл успешно переименован в {safe_name}.mp3")
+        gr.Info(f"File successfully renamed to {safe_name}.mp3")
         proj = _project_from_path(old_path) or str(ab_path)
         times_file = data_path / proj / "parse_times.json"
         if times_file.exists():
@@ -1079,14 +1079,14 @@ def rename_selected_file(current_path, new_name, ab_path, file_index, df_output)
                     new_df.append(row)
             df_output = new_df
     except Exception as e:
-        gr.Warning(f"Ошибка переименования: {e}")
+        gr.Warning(f"Rename error: {e}")
     return df_output, gr.update(visible=False), file_index
 
 
 def stop_tts():
     global stop_text_to_sp
     stop_text_to_sp = True
-    return "🛑 Остановка после текущей строки (Сохраняем файл)..."
+    return "🛑 Stopping after current line (saving file)..."
 
 
 # === ПАКЕТНАЯ ОЗВУЧКА ВСЕХ ПРОЕКТОВ ===
@@ -1115,7 +1115,7 @@ def batch_tts_all_projects(
     if not all_projects:
         yield (
             [],
-            "⚠️ Нет проектов для пакетной озвучки!",
+            "⚠️ No projects for batch TTS!",
             get_batch_metrics_html("", 0, 0, 0, 0, "00:00", "00:00", "0.0"),
             gr.update(),
             batch_file_index,
@@ -1149,8 +1149,8 @@ def batch_tts_all_projects(
 
     yield (
         [],
-        f"📦 Подготовка {total} проектов...",
-        get_batch_metrics_html("Подготовка...", 0, 0, total, 0, "00:00", "...", "..."),
+        f"📦 Preparing {total} projects...",
+        get_batch_metrics_html("Preparing...", 0, 0, total, 0, "00:00", "...", "..."),
         gr.update(),
         batch_file_index,
     )
@@ -1179,7 +1179,7 @@ def batch_tts_all_projects(
 
             yield (
                 all_files,
-                f"🛑 Остановлено! Озвучено {processed_count} из {total}",
+                f"🛑 Stopped! Synthesized {processed_count} of {total}",
                 partial_html,
                 _safe_audio(last_final_mp3_path),
                 batch_file_index,
@@ -1209,12 +1209,12 @@ def batch_tts_all_projects(
                     )
                     fb2_file.write_text(fb2_xml, encoding="utf-8")
                 except Exception as e:
-                    yield (all_files, f"⚠️ [{idx}/{total}] {project}: не удалось создать fb2 из txt: {e}", gr.update(), gr.update(), batch_file_index)
+                    yield (all_files, f"⚠️ [{idx}/{total}] {project}: failed to create fb2 from txt: {e}", gr.update(), gr.update(), batch_file_index)
                     continue
 
         # нет ни xml, ни fb2 (и txt не нашёлся) → пропуск с логом
         if not has_xml and not fb2_file.exists():
-            yield (all_files, f"⚠️ [{idx}/{total}] {project}: пропущен — нет XML/FB2/TXT", gr.update(), gr.update(), batch_file_index)
+            yield (all_files, f"⚠️ [{idx}/{total}] {project}: skipped — no XML/FB2/TXT", gr.update(), gr.update(), batch_file_index)
             continue
 
         # Авто-парсинг FB2 если XML ещё нет
@@ -1226,7 +1226,7 @@ def batch_tts_all_projects(
             sec_per_proj = max(0, 1 / speed) if speed > 0 else 0
             yield (
                 all_files,
-                f"📁 [{idx}/{total}] {project}: Парсинг FB2 → XML...",
+                f"📁 [{idx}/{total}] {project}: Parsing FB2 → XML...",
                 get_batch_metrics_html(
                         project,
                         0,
@@ -1235,7 +1235,7 @@ def batch_tts_all_projects(
                         batch_pre_pct,
                         format_time_hms(elapsed),
                         format_time_hms(rem),
-                        f"~{format_time_hms(sec_per_proj)}/пр",
+                        f"~{format_time_hms(sec_per_proj)}/proj",
                     ),
                     gr.update(),
                     batch_file_index,
@@ -1306,7 +1306,7 @@ def batch_tts_all_projects(
             except Exception as e:
                 yield (
                     all_files,
-                    f"⚠️ [{idx}/{total}] {project}: Ошибка парсинга: {e}",
+                    f"⚠️ [{idx}/{total}] {project}: Parse error: {e}",
                     get_batch_metrics_html(
                         project,
                         0,
@@ -1354,10 +1354,10 @@ def batch_tts_all_projects(
 
             # Формат скорости: если проектов в секунду < 0.01, показываем мин/проект
             if speed_proj > 0.01:
-                speed_str = f"{speed_proj:.2f} пр/с"
+                speed_str = f"{speed_proj:.2f} proj/s"
             else:
                 sec_per_proj = max(0, 1 / speed_proj) if speed_proj > 0 else 0
-                speed_str = f"~{format_time_hms(sec_per_proj)}/пр"
+                speed_str = f"~{format_time_hms(sec_per_proj)}/proj"
 
             batch_html = get_batch_metrics_html(
                 project,
@@ -1408,23 +1408,23 @@ def batch_tts_all_projects(
 
     # Финальный HTML: двойной бар + сводная таблица
     final_bars = get_batch_metrics_html(
-        "✅ Завершено",
+        "✅ Completed",
         100,
         total,
         total,
         100,
         format_time_hms(elapsed),
         "00:00",
-        f"~{format_time_hms(sec_per_proj_final)}/пр",
+        f"~{format_time_hms(sec_per_proj_final)}/proj",
     )
     summary_table = get_batch_summary_html(batch_stats)
     final_html = summary_table + "\n" + final_bars if summary_table else final_bars
 
     _synthesis_completed = True
-    gr.Info("Готово")
+    gr.Info("Done")
     yield (
         all_files,
-        f"🎉 ГОТОВО! Озвучено {processed_count} из {total} проектов",
+        f"🎉 DONE! Synthesized {processed_count} of {total} projects",
         final_html,
         _safe_audio(last_final_mp3_path),
         batch_file_index,
@@ -1494,7 +1494,7 @@ def change_tts_model(mver):
 
 # === ОТРИСОВКА ВКЛАДКИ ===
 def tts_tab(ab_path, tts_state):
-    with gr.Tab(label="🎧 ОЗВУЧКА", id=2) as tts_tab_ui:
+    with gr.Tab(label="🎧 TTS", id=2) as tts_tab_ui:
         with gr.Row():
             try:
                 fresh_config = AppConfig.load_user_settings()
@@ -1503,7 +1503,7 @@ def tts_tab(ab_path, tts_state):
                 saved_spk = ""
             spk_sel = gr.Dropdown(
                 value=saved_spk,
-                label="Выбрать основной голос",
+                label="Select main voice",
                 choices=[saved_spk] if saved_spk else [""],
                 interactive=True,
             )
@@ -1512,14 +1512,14 @@ def tts_tab(ab_path, tts_state):
                 3,
                 config.sp_rate,
                 step=0.1,
-                label="Задать скорость",
+                label="Set speed",
                 interactive=True,
             )
         with gr.Row():
             back_sound_sel = gr.Dropdown(
                 value=config.back_sound_sel,
                 allow_custom_value=True,
-                label="Выбрать музыку для оглавлений",
+                label="Select music for table of contents",
                 choices=[""],
                 interactive=True,
             )
@@ -1528,7 +1528,7 @@ def tts_tab(ab_path, tts_state):
                 256,
                 config.bitrate,
                 step=2,
-                label="Задать битрейт аудио",
+                label="Set audio bitrate",
                 interactive=True,
             )
             noise_lvl = gr.Slider(
@@ -1536,19 +1536,19 @@ def tts_tab(ab_path, tts_state):
                 64,
                 config.noise_lvl,
                 step=1,
-                label="Уровень шума(выше-лучше)",
+                label="Noise level (higher=better)",
                 interactive=True,
             )
 
         with gr.Row():
             with gr.Column(scale=3):
                 with gr.Row():
-                    use_sound_effect = gr.Checkbox(label="Аудио эффекты", value=False)
+                    use_sound_effect = gr.Checkbox(label="Audio effects", value=False)
                     repl = gr.Checkbox(
-                        label="Перезаписать существующие MP3", value=True
+                        label="Overwrite existing MP3", value=True
                     )
                     use_accents = gr.Checkbox(
-                        label="Проставить ударения (РУ)", value=True
+                        label="Add stress marks (RU)", value=True
                     )
             with gr.Column(scale=1, min_width=150):
                 tts_button = gr.Button(
@@ -1558,35 +1558,35 @@ def tts_tab(ab_path, tts_state):
                     size="sm",
                 )
                 batch_tts_btn = gr.Button(
-                    "📦 Пакетная озвучка выбранных",
+                    "📦 Batch TTS (selected)",
                     variant="primary",
                     size="sm",
                     elem_id="batch_tts_btn",
                 )
-                stop_btn = gr.Button("🚫 Прервать", variant="stop", size="sm")
+                stop_btn = gr.Button("🚫 Stop", variant="stop", size="sm")
 
         with gr.Row():
             with gr.Column(scale=1):
                 batch_project_sel = gr.CheckboxGroup(
                     choices=sorted(get_data_list()),
-                    label="🎯 Выберите проекты для пакетной озвучки (пусто = все)",
+                    label="🎯 Select projects for batch TTS (empty = all)",
                     interactive=True,
                     elem_id="batch_project_sel",
                 )
                 with gr.Row():
-                    select_all_btn = gr.Button("✅ Выбрать все", size="sm", scale=1)
-                    deselect_all_btn = gr.Button("⬜ Снять всё", size="sm", scale=1)
+                    select_all_btn = gr.Button("✅ Select all", size="sm", scale=1)
+                    deselect_all_btn = gr.Button("⬜ Deselect all", size="sm", scale=1)
 
         metrics_panel = gr.HTML(
-            value=get_metrics_html(0, "00:00", "00:00", "0.0 стр/с")
+            value=get_metrics_html(0, "00:00", "00:00", "0.0 lines/s")
         )
         with gr.Group(elem_id="log_group"):
             output_log = gr.Textbox(
-                label="Живой лог озвучки",
+                label="Live TTS log",
                 lines=3,
                 max_lines=3,
                 interactive=False,
-                value="В ожидании старта...",
+                value="Waiting to start...",
             )
 
         with gr.Row():
@@ -1595,22 +1595,22 @@ def tts_tab(ab_path, tts_state):
 
         # Таблица аудио: узкие колонки + колонка «Модель» (короткое имя)
         df_output = gr.DataFrame(
-            headers=["Имя файла", "Модель", "Размер", "Длит.", "Обраб."],
+            headers=["File name", "Model", "Size", "Dur.", "Proc."],
             interactive=False,
             datatype=["str", "str", "str", "str", "str"],
             column_widths=["220px", "100px", "70px", "80px", "80px"],
             type="array",
             wrap=True,
         )
-        audio_player = gr.Audio(label="Плеер", type="filepath", interactive=False, autoplay=True)
+        audio_player = gr.Audio(label="Player", type="filepath", interactive=False, autoplay=True)
         completion_sound_html = gr.HTML(visible=False)
 
         # ── Панель управления файлами (объединены логически) ──
         with gr.Group():
             with gr.Row(visible=False) as rename_panel:
-                new_name_input = gr.Textbox(label="Новое имя файла (без .mp3)", scale=3)
+                new_name_input = gr.Textbox(label="New file name (without .mp3)", scale=3)
                 rename_btn = gr.Button(
-                    "✏️ Переименовать",
+                    "✏️ Rename",
                     scale=1,
                     variant="secondary",
                     elem_id="rename_file_btn",
@@ -1618,21 +1618,21 @@ def tts_tab(ab_path, tts_state):
 
             with gr.Row():
                 del_btn = gr.Button(
-                    "❌ Удалить файл (Delete)",
+                    "❌ Delete file (Delete)",
                     interactive=False,
                     elem_id="del_file_btn",
                     size="sm",
                 )
                 row_download_btn = gr.DownloadButton(
-                    "📥 Скачать файл",
+                    "📥 Download file",
                     value=None,
                     variant="secondary",
                     visible=True,
                     size="sm",
                 )
-                create_arh_btn = gr.Button("📦 Создать архив", size="sm")
+                create_arh_btn = gr.Button("📦 Create archive", size="sm")
                 download_btn = gr.DownloadButton(
-                    "📥 Скачать архив",
+                    "📥 Download archive",
                     value=None,
                     variant="primary",
                     visible=False,
@@ -1643,22 +1643,22 @@ def tts_tab(ab_path, tts_state):
             with gr.Row():
                 file_checkboxes = gr.CheckboxGroup(
                     choices=[],
-                    label="🎯 Выберите файлы для массовых операций",
+                    label="🎯 Select files for bulk operations",
                     interactive=True,
                     elem_id="file_checkboxes",
                 )
 
             with gr.Row():
-                sel_all_files_btn = gr.Button("✅ Выбрать все", size="sm", scale=1)
-                desel_all_files_btn = gr.Button("⬜ Снять всё", size="sm", scale=1)
+                sel_all_files_btn = gr.Button("✅ Select all", size="sm", scale=1)
+                desel_all_files_btn = gr.Button("⬜ Deselect all", size="sm", scale=1)
 
             with gr.Row():
                 dl_selected_btn = gr.Button(
-                    "📦 Скачать выбранные (zip)", size="sm", variant="primary"
+                    "📦 Download selected (zip)", size="sm", variant="primary"
                 )
                 dl_selected_output = gr.DownloadButton(visible=False, size="sm")
                 del_selected_btn = gr.Button(
-                    "🗑 Удалить выбранные", size="sm", variant="stop"
+                    "🗑 Delete selected", size="sm", variant="stop"
                 )
 
             # Состояние подтверждения для массового удаления
@@ -1709,7 +1709,7 @@ def tts_tab(ab_path, tts_state):
     # ── ФИКС B: удалить выбранные (с подтверждением) ──
     # Сброс подтверждения при изменении выбора файлов
     file_checkboxes.change(
-        fn=lambda: (gr.update(value="🗑 Удалить выбранные"), "idle"),
+        fn=lambda: (gr.update(value="🗑 Delete selected"), "idle"),
         outputs=[del_selected_btn, del_confirm_state],
     )
     del_selected_btn.click(
@@ -1720,8 +1720,8 @@ def tts_tab(ab_path, tts_state):
 
     tts_button.click(
         fn=lambda: (
-            gr.update(value="⏳ Подготовка файлов..."),
-            get_metrics_html(0, "00:00", "00:00", "0.0 стр/с"),
+            gr.update(value="⏳ Preparing files..."),
+            get_metrics_html(0, "00:00", "00:00", "0.0 lines/s"),
         ),
         outputs=[output_log, metrics_panel],
     ).then(
@@ -1764,8 +1764,8 @@ def tts_tab(ab_path, tts_state):
 
     batch_tts_btn.click(
         fn=lambda: (
-            gr.update(value="📦 Запуск пакетной озвучки..."),
-            get_batch_metrics_html("Подготовка...", 0, 0, 0, 0, "00:00", "...", "0.0"),
+            gr.update(value="📦 Starting batch TTS..."),
+            get_batch_metrics_html("Preparing...", 0, 0, 0, 0, "00:00", "...", "0.0"),
         ),
         outputs=[output_log, metrics_panel],
     ).then(

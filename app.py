@@ -79,7 +79,7 @@ def global_exception_handler(exc_type, exc_value, exc_traceback):
     if issubclass(exc_type, KeyboardInterrupt):
         sys.__excepthook__(exc_type, exc_value, exc_traceback)
         return
-    logger.error("КРИТИЧЕСКАЯ ОШИБКА:", exc_info=(exc_type, exc_value, exc_traceback))
+    logger.error("CRITICAL ERROR:", exc_info=(exc_type, exc_value, exc_traceback))
 
 sys.excepthook = global_exception_handler
 
@@ -156,12 +156,12 @@ txt_parser = TextParse(False)
 
 def process_url_wrapper(url, remove_ru):
     if not url or not url.strip(): return gr.update(), gr.update()
-    gr.Info("Иду на сайт и вытягиваю текст...", duration=3)
+    gr.Info("Fetching the webpage and extracting text...", duration=3)
     ab_name, error_msg = scrape_and_save_article(url, remove_ru)
     if error_msg:
         gr.Warning(error_msg)
         return gr.update(), gr.update()
-    gr.Info("Статья успешно скачана!", duration=4)
+    gr.Info("Article downloaded successfully!", duration=4)
     return refresh_data(ab_name), refresh_data(ab_name)
 
 def _extract_file_path(file_obj):
@@ -202,7 +202,7 @@ def process_file_wrapper(manual_path, drop_files, remove_ru):
     errors = []
     for i, fp in enumerate(file_paths, 1):
         fname = Path(fp).name
-        gr.Info(f"[{i}/{len(file_paths)}] Загрузка: {fname}...", duration=2)
+        gr.Info(f"[{i}/{len(file_paths)}] Loading: {fname}...", duration=2)
         ab_name, error_msg = parse_and_save_document(fp, remove_ru)
         if error_msg:
             errors.append(f"{fname}: {error_msg}")
@@ -220,7 +220,7 @@ def process_file_wrapper(manual_path, drop_files, remove_ru):
     drop_update = refresh_data(first_ab)
     
     # ── Первый yield: обновляем dropdown + показываем начало прогресса ──
-    yield drop_update, drop_update, get_upload_progress_html(0, 0, total, "Запуск..."), f"📦 Загружено {total} проектов. Начинаю парсинг..."
+    yield drop_update, drop_update, get_upload_progress_html(0, 0, total, "Starting..."), f"📦 Loaded {total} projects. Starting parse..."
     
     # ── Шаг 3: Парсинг каждого проекта с живым прогрессом ──
     # Читаем сохранённые настройки парсинга
@@ -247,22 +247,22 @@ def process_file_wrapper(manual_path, drop_files, remove_ru):
                 yield (
                     gr.update(), gr.update(),
                     get_upload_progress_html(overall_pct, i + 1, total, f"{ab_name}: {msg}"),
-                    f"📄 [{i+1}/{total}] Парсинг: {ab_name} — {msg}"
+                    f"📄 [{i+1}/{total}] Parsing: {ab_name} — {msg}"
                 )
         except Exception as e:
-            logger.warning(f"⚠️ Ошибка авто-парсинга {ab_name}: {e}")
+            logger.warning(f"⚠️ Auto-parse error {ab_name}: {e}")
             yield (
                 gr.update(), gr.update(),
-                get_upload_progress_html(int((i+1)/total*100), i+1, total, f"⚠️ Ошибка: {ab_name}"),
-                f"⚠️ [{i+1}/{total}] Ошибка парсинга {ab_name}: {e}"
+                get_upload_progress_html(int((i+1)/total*100), i+1, total, f"⚠️ Error: {ab_name}"),
+                f"⚠️ [{i+1}/{total}] Parse error {ab_name}: {e}"
             )
     
     # ── Финальный yield: скрываем прогресс-бар ──
-    gr.Info(f"✅ Загружено и распарсено: {total} проектов", duration=5)
+    gr.Info(f"✅ Loaded and parsed: {total} projects", duration=5)
     yield (
         gr.update(), gr.update(),
         "",  # сбрасываем прогресс-бар
-        f"🎉 Все {total} проектов распарсены! Можно переходить к озвучке."
+        f"🎉 All {total} projects parsed! Ready for TTS."
     )
 
 def clean_srt_timings(text):
@@ -283,7 +283,7 @@ def toggle_tab_parse(ab_path): return gr.Tabs(visible=True, selected=1), ab_path
 def put_accents(string): return accentizer.process_accent(string, r'\+\w+|\w+\+\w+')
 
 def text_to_audio(string, spk, rate=1, noise=None, pitch=None, ref_audio=None, ref_text=''):
-    if not synth: return gr.update(label = "Модель не загружена!")
+    if not synth: return gr.update(label = "Model not loaded!")
     def safe_synth(t, disable_norm=False):
         txt = t if disable_norm else txt_parser.garbage(normalize_russian(t))
         res = synth.synth_audio(txt, spk, rate, noise, ref_audio, ref_text)
@@ -308,38 +308,38 @@ def text_to_audio(string, spk, rate=1, noise=None, pitch=None, ref_audio=None, r
             np_audio = (np_audio * 32767).astype(np.int16)
         return (sr, np_audio)
     except Exception as e:
-        logger.error(f"Ошибка маршрутизатора: {e}", exc_info=True)
+        logger.error(f"Router error: {e}", exc_info=True)
         return None
 
 def rename_project_folder(old_name, new_name):
     if not old_name or not new_name: return gr.update(), gr.update(), gr.update(visible=False)
     safe_new_name = "".join([c for c in new_name if c.isalnum() or c in (' ', '_', '-')]).rstrip()
     if not safe_new_name: 
-        gr.Warning("Недопустимое имя проекта!")
+        gr.Warning("Invalid project name!")
         return gr.update(), gr.update(), gr.update(visible=False)
     old_dir = data_path / old_name
     new_dir = data_path / safe_new_name
     if not old_dir.exists():
-        gr.Warning(f"Проект {old_name} не найден!")
+        gr.Warning(f"Project {old_name} not found!")
         return gr.update(), gr.update(), gr.update(visible=False)
     if new_dir.exists():
-        gr.Warning(f"Проект с именем {safe_new_name} уже существует!")
+        gr.Warning(f"Project named {safe_new_name} already exists!")
         return gr.update(), gr.update(), gr.update()
     try:
         old_dir.rename(new_dir)
-        gr.Info(f"Проект переименован в {safe_new_name}")
+        gr.Info(f"Project renamed to {safe_new_name}")
         new_choices = sorted(get_data_list())
         return gr.update(choices=new_choices, value=safe_new_name), gr.update(choices=new_choices, value=safe_new_name), gr.update(visible=False)
     except Exception as e:
-        logger.error(f"Ошибка переименования: {e}", exc_info=True)
-        gr.Warning(f"Ошибка: {e}")
+        logger.error(f"Rename error: {e}", exc_info=True)
+        gr.Warning(f"Error: {e}")
         return gr.update(), gr.update(), gr.update(visible=False)
 
 tts_models_list = [
-    ('Vosk 0.10 (dev. 56 голосов)', 2),
-    ('Silero v5_5 (5 голосов)', 3), ('Silero v5_cis (60 голосов)', 4),
+    ('Vosk 0.10 (dev. 56 voices)', 2),
+    ('Silero v5_5 (5 voices)', 3), ('Silero v5_cis (60 voices)', 4),
     ('Misha24-10 (F5-TTS)', 5), ('ESpeech-TTS (F5-TTS)', 6),
-    ('Silero English v3 (Английский)', 7),
+    ('Silero English v3 (English)', 7),
 ]
 accent_models_list = [('RuAccent', 1), ('Silero stress', 2)]
 
@@ -364,7 +364,7 @@ def load_existing_fb2(ab_name):
         if not paras: raw_text = re.sub(r'<[^>]+>', '', content).strip()
         else: raw_text = "\n".join(paras).replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
         return ab_name, raw_text
-    except Exception as e: return ab_name, f"Ошибка: {e}"
+    except Exception as e: return ab_name, f"Error: {e}"
 
 global_shortcuts = """
 <style>
@@ -407,9 +407,9 @@ with gr.Blocks(title="FB2 to Speech (Enterprise Edition) 🇷🇺") as App:
     ab_state = gr.State()
     
     with gr.Sidebar():
-        tts_sel = gr.Dropdown(value='', allow_custom_value=True, label='Выбрать модель TTS', choices=tts_models_list, interactive=True)
+        tts_sel = gr.Dropdown(value='', allow_custom_value=True, label='Select TTS model', choices=tts_models_list, interactive=True)
         tts_status = gr.Textbox(show_label=False, visible=True, lines=1)
-        acc_sel = gr.Dropdown(value='', allow_custom_value=True, label='Расстановка ударений', choices=accent_models_list, interactive=True)
+        acc_sel = gr.Dropdown(value='', allow_custom_value=True, label='Stress placement', choices=accent_models_list, interactive=True)
         acc_status = gr.Textbox(show_label=False, visible=True, lines=1)
 
         gr.Markdown("---")
@@ -417,67 +417,67 @@ with gr.Blocks(title="FB2 to Speech (Enterprise Edition) 🇷🇺") as App:
             device_radio = gr.Radio(
                 choices=["auto", "cpu"],
                 value="auto",
-                label="🖥 Устройство вычисления",
-                info="auto = GPU (быстро, 6ГБ VRAM) | cpu = ОЗУ (медленнее, но не грузит видеокарту)",
+                label="🖥 Compute device",
+                info="auto = GPU (fast, 6GB VRAM) | cpu = RAM (slower, but does not load the GPU)",
                 interactive=True
             )
         
         gr.Markdown("---")
-        fast_ru_cb = gr.Checkbox(label="⚡ Русский через облако (Edge TTS)", value=router.USE_EDGE_FOR_RUSSIAN, info="Мгновенная скорость! Нужен интернет. Голос: Дмитрий")
-        fast_eng_cb = gr.Checkbox(label="⚡ Английский через облако", value=router.USE_EDGE_FOR_ENGLISH, info="Быстрая генерация через Microsoft Edge")
+        fast_ru_cb = gr.Checkbox(label="⚡ Russian via cloud (Edge TTS)", value=router.USE_EDGE_FOR_RUSSIAN, info="Instant speed! Requires internet. Voice: Dmitry")
+        fast_eng_cb = gr.Checkbox(label="⚡ English via cloud", value=router.USE_EDGE_FOR_ENGLISH, info="Fast generation via Microsoft Edge")
         
         # ДОБАВЛЕН ИВРИТ ЧЕРЕЗ ОБЛАКО
-        fast_heb_cb = gr.Checkbox(label="⚡ Иврит через облако", value=router.USE_EDGE_FOR_HEBREW, info="Microsoft Edge TTS (рекомендуется — локальный TTS не поддерживает иврит)")
+        fast_heb_cb = gr.Checkbox(label="⚡ Hebrew via cloud", value=router.USE_EDGE_FOR_HEBREW, info="Microsoft Edge TTS (recommended — local TTS does not support Hebrew)")
         
-        dict_mode_cb = gr.Checkbox(label="📚 Режим словаря (длинные паузы)", value=router.DICTIONARY_MODE, info="Вдох 1 сек. между языками")
+        dict_mode_cb = gr.Checkbox(label="📚 Dictionary mode (long pauses)", value=router.DICTIONARY_MODE, info="1 sec breath between languages")
         
         gr.Markdown("---")
         with gr.Row():
-            restart_btn = gr.Button("🔄 Перезапуск", variant="primary")
-            quit_btn = gr.Button("🚪 Выход", variant="stop")
+            restart_btn = gr.Button("🔄 Restart", variant="primary")
+            quit_btn = gr.Button("🚪 Quit", variant="stop")
         
         def restart_app(): os._exit(42)
         def stop_app(): os._exit(0)
         
-        js_restart = "function(){ document.body.innerHTML = '<h1 style=\"color:#38bdf8; text-align:center; margin-top:20%; font-family:sans-serif;\">🔄 Перезапуск сервера...<br>Пожалуйста, подождите.</h1>'; setTimeout(() => location.reload(), 2000); }"
-        js_exit = "function(){ document.body.innerHTML = '<h1 style=\"color:#f8fafc; text-align:center; margin-top:20%; font-family:sans-serif;\">Сервер остановлен 🛑<br><br>Вкладку можно закрыть.</h1>'; setTimeout(() => { window.open('', '_self', ''); window.close(); }, 500); }"
+        js_restart = "function(){ document.body.innerHTML = '<h1 style=\"color:#38bdf8; text-align:center; margin-top:20%; font-family:sans-serif;\">🔄 Restarting server...<br>Please wait.</h1>'; setTimeout(() => location.reload(), 2000); }"
+        js_exit = "function(){ document.body.innerHTML = '<h1 style=\"color:#f8fafc; text-align:center; margin-top:20%; font-family:sans-serif;\">Server stopped 🛑<br><br>You can close this tab.</h1>'; setTimeout(() => { window.open('', '_self', ''); window.close(); }, 500); }"
 
     with gr.Tabs() as project_tabs:
-        with gr.Tab("📁 Менеджер Проектов", id="fb2tts") as fb2tts_tab:
-            with gr.Row(visible=False): remove_ru_cb = gr.Checkbox(label="Очистить от русского текста", value=False)
+        with gr.Tab("📁 Project Manager", id="fb2tts") as fb2tts_tab:
+            with gr.Row(visible=False): remove_ru_cb = gr.Checkbox(label="Remove Russian text", value=False)
             
             with gr.Row(elem_classes=["uniform-row"]):
                 with gr.Column(scale=5):
-                    ab_path = gr.Dropdown(value='', label="Выбор проекта", allow_custom_value=True, choices=get_data_list(), interactive=True)
+                    ab_path = gr.Dropdown(value='', label="Select project", allow_custom_value=True, choices=get_data_list(), interactive=True)
                 with gr.Column(scale=3):
                     with gr.Row():
-                        show_rename_btn = gr.Button("✏️ Переименовать", elem_id="show_rename_btn", elem_classes=["fixed-height-btn"])
-                        rm_dataset = gr.Button("❌ Удалить", variant="secondary", elem_classes=["fixed-height-btn"])
-                        rm_all_dataset = gr.Button("💣 Удалить ВСЕ", variant="stop", elem_classes=["fixed-height-btn"])
+                        show_rename_btn = gr.Button("✏️ Rename", elem_id="show_rename_btn", elem_classes=["fixed-height-btn"])
+                        rm_dataset = gr.Button("❌ Delete", variant="secondary", elem_classes=["fixed-height-btn"])
+                        rm_all_dataset = gr.Button("💣 Delete ALL", variant="stop", elem_classes=["fixed-height-btn"])
             
             with gr.Row():
                 with gr.Column(scale=1):
                     with gr.Group():
                         with gr.Row(elem_classes=["uniform-row"]):
-                            paste_file_btn = gr.Button("📋 Из буфера", variant="primary", elem_classes=["fixed-height-btn"], scale=1)
-                            manual_file_input = gr.Textbox(label="Путь к файлам (по одному на строку)", lines=2, scale=4, placeholder="C:\\books\\book1.fb2\nC:\\books\\book2.pdf")
-                        upload_text_file = gr.File(label="Или перетащи файлы сюда: PDF, DOCX, EPUB, RTF, HTML, FB2...", file_count="multiple", height=100)
-                        process_file_btn = gr.Button("⬇️ Загрузить файл(ы)", variant="primary")
+                            paste_file_btn = gr.Button("📋 From clipboard", variant="primary", elem_classes=["fixed-height-btn"], scale=1)
+                            manual_file_input = gr.Textbox(label="File paths (one per line)", lines=2, scale=4, placeholder="C:\\books\\book1.fb2\nC:\\books\\book2.pdf")
+                        upload_text_file = gr.File(label="Or drag files here: PDF, DOCX, EPUB, RTF, HTML, FB2...", file_count="multiple", height=100)
+                        process_file_btn = gr.Button("⬇️ Upload file(s)", variant="primary")
                 
                 with gr.Column(scale=1):
                     with gr.Group():
                         with gr.Row(elem_classes=["uniform-row"]):
-                            paste_url_btn = gr.Button("📋 Из буфера", variant="primary", elem_classes=["fixed-height-btn"], scale=1)
-                            url_input = gr.Textbox(label="🌐 Или ссылка на статью", lines=1, scale=4)
-                        url_btn = gr.Button("⬇️ Скачать статью", variant="primary")
+                            paste_url_btn = gr.Button("📋 From clipboard", variant="primary", elem_classes=["fixed-height-btn"], scale=1)
+                            url_input = gr.Textbox(label="🌐 Or article URL", lines=1, scale=4)
+                        url_btn = gr.Button("⬇️ Download article", variant="primary")
             
             with gr.Row():
                 upload_progress_html = gr.HTML(value="", visible=True)
-                upload_status_text = gr.Textbox(label="Статус загрузки", lines=1, interactive=False, visible=True)
+                upload_status_text = gr.Textbox(label="Upload status", lines=1, interactive=False, visible=True)
             
             with gr.Row(visible=False) as rename_proj_panel:
-                new_proj_name = gr.Textbox(label="Введите новое имя проекта", scale=4)
-                confirm_rename_btn = gr.Button("💾 Сохранить новое имя", scale=1, variant="primary")
+                new_proj_name = gr.Textbox(label="Enter new project name", scale=4)
+                confirm_rename_btn = gr.Button("💾 Save new name", scale=1, variant="primary")
                 
             with gr.Tabs(visible=False) as inner_tabs:
                 cover_tab(ab_path, ab_state)
@@ -485,25 +485,25 @@ with gr.Blocks(title="FB2 to Speech (Enterprise Edition) 🇷🇺") as App:
                 vocab_tab(ab_path, file_content_box)
                 tts_tab(ab_path, tts_state)
 
-        with gr.Tab("📝 Создать FB2 / Редактор"):
-            gr.Markdown("### ✨ Создать новый проект или отредактировать существующий")
+        with gr.Tab("📝 Create FB2 / Editor"):
+            gr.Markdown("### ✨ Create a new project or edit an existing one")
             
             with gr.Row():
                 with gr.Column(scale=2):
                     with gr.Group():
-                        gr.Markdown("#### 📥 Загрузить существующий")
+                        gr.Markdown("#### 📥 Load existing")
                         load_project_dropdown = gr.Dropdown(
-                            label="Выберите проект",
+                            label="Select project",
                             choices=get_data_list(),
                             interactive=True,
-                            info="Загрузит FB2-файл проекта в редактор ниже"
+                            info="Will load the project's FB2 file into the editor below"
                         )
                 
                 with gr.Column(scale=1):
                     with gr.Group():
-                        gr.Markdown("#### 🗑 Удалить")
+                        gr.Markdown("#### 🗑 Delete")
                         fb2_delete_btn = gr.Button(
-                            "🗑 Удалить проект (Delete)",
+                            "🗑 Delete project (Delete)",
                             variant="stop",
                             elem_id="del_file_btn",
                             elem_classes=["fixed-height-btn"]
@@ -514,97 +514,97 @@ with gr.Blocks(title="FB2 to Speech (Enterprise Edition) 🇷🇺") as App:
             with gr.Row():
                 with gr.Column(scale=4):
                     fb2_title_input = gr.Textbox(
-                        label="📛 Название проекта",
-                        value="МояОзвучка",
-                        placeholder="Введите название (используется как имя папки и файла)"
+                        label="📛 Project name",
+                        value="MyAudiobook",
+                        placeholder="Enter a name (used as folder and file name)"
                     )
                     fb2_text_input = gr.Textbox(
-                        label="📝 Текст (строки через Enter = новые абзацы)",
+                        label="📝 Text (Enter-separated lines = new paragraphs)",
                         lines=14,
-                        placeholder="Вставьте текст сюда...\nКаждая строка станет отдельным абзацем в FB2.\n\nТакже можно вставить SRT-субтитры и очистить их кнопкой ниже."
+                        placeholder="Paste text here...\nEach line becomes a separate paragraph in FB2.\n\nYou can also paste SRT subtitles and clean them with the button below."
                     )
                 
                 with gr.Column(scale=1, min_width=200):
                     with gr.Group():
-                        gr.Markdown("#### ⚡ Действия")
+                        gr.Markdown("#### ⚡ Actions")
                         fb2_generate_btn = gr.Button(
-                            "✨ Сохранить (Ctrl+Enter)",
+                            "✨ Save (Ctrl+Enter)",
                             variant="primary",
                             elem_id="fb2_gen_btn",
                             elem_classes=["fixed-height-btn"]
                         )
                         fb2_update_btn = gr.Button(
-                            "🔄 Перезаписать",
+                            "🔄 Overwrite",
                             variant="secondary",
                             elem_classes=["fixed-height-btn"]
                         )
                         clean_srt_btn = gr.Button(
-                            "✂️ Очистить SRT (таймкоды)",
+                            "✂️ Clean SRT (timecodes)",
                             variant="secondary",
                             elem_classes=["fixed-height-btn"]
                         )
                     
                     with gr.Group():
-                        gr.Markdown("#### 📦 Результат")
-                        fb2_file_output = gr.File(label="Скачать FB2", height=80)
+                        gr.Markdown("#### 📦 Result")
+                        fb2_file_output = gr.File(label="Download FB2", height=80)
                         editor_status = gr.Textbox(
-                            label="Статус",
+                            label="Status",
                             lines=2,
                             interactive=False,
-                            placeholder="Здесь появится результат операции..."
+                            placeholder="The operation result will appear here..."
                         )
 
         with gr.Tab(label="🎙️ Demo TTS"):
             with gr.Group(visible=False) as f5_gr:
                 with gr.Row(): 
-                    ref_audio = gr.Audio(label='Ваш образец голоса', elem_classes="small-audio")
+                    ref_audio = gr.Audio(label='Your voice sample', elem_classes="small-audio")
                 with gr.Row(): 
-                    ref_text = gr.Textbox(label='Текст в образце', lines=1, placeholder="Введите текст, который звучит в образце", interactive=True)
+                    ref_text = gr.Textbox(label='Text in sample', lines=1, placeholder="Enter the text spoken in the sample", interactive=True)
             with gr.Row():
-                spk_sel = gr.Dropdown(value='', label='Выбрать голос', choices=[''], interactive=True)
-                speech_rate = gr.Slider(0, 3, 1, step=0.1, label="Задать скорость", interactive=True)
-                noise_lvl = gr.Slider(0, 64, 16, step=1, label="Уровень шума", interactive=True)
-                pitch_sel = gr.Slider(0, 100, 50, step=1, label="Тембр", interactive=True)
+                spk_sel = gr.Dropdown(value='', label='Select voice', choices=[''], interactive=True)
+                speech_rate = gr.Slider(0, 3, 1, step=0.1, label="Set speed", interactive=True)
+                noise_lvl = gr.Slider(0, 64, 16, step=1, label="Noise level", interactive=True)
+                pitch_sel = gr.Slider(0, 100, 50, step=1, label="Pitch", interactive=True)
             with gr.Row():
                 text_input = gr.Textbox(label='Текст', lines=2, placeholder="English | עברית | Русский", interactive=True, max_length=220)
                 audio_output = gr.Audio(interactive=False, buttons=[])
             with gr.Row():
-                accent_button = gr.Button("Проставить ударения", interactive=False, elem_classes=["fixed-height-btn"])
-                tts_button = gr.Button("Преобразовать в речь (Ctrl+Enter)", interactive=False, elem_id="demo_tts_btn", elem_classes=["fixed-height-btn"])
+                accent_button = gr.Button("Add stress marks", interactive=False, elem_classes=["fixed-height-btn"])
+                tts_button = gr.Button("Convert to speech (Ctrl+Enter)", interactive=False, elem_id="demo_tts_btn", elem_classes=["fixed-height-btn"])
 
-        with gr.Tab("🛠️ Система и Очистка") as system_tab:
+        with gr.Tab("🛠️ System & Cleanup") as system_tab:
             with gr.Row():
                 with gr.Column(scale=1):
-                    clean_tmp_btn = gr.Button("🧹 Очистить папку tmp", variant="primary")
-                    tmp_status = gr.Textbox(label="Результат", interactive=False, lines=1)
+                    clean_tmp_btn = gr.Button("🧹 Clean tmp folder", variant="primary")
+                    tmp_status = gr.Textbox(label="Result", interactive=False, lines=1)
                 with gr.Column(scale=1):
-                    model_to_del = gr.Dropdown(choices=get_installed_models(), label="Удалить модель")
-                    del_model_btn = gr.Button("❌ Удалить", variant="stop")
-                    model_del_status = gr.Textbox(label="Результат", interactive=False, lines=1)
+                    model_to_del = gr.Dropdown(choices=get_installed_models(), label="Delete model")
+                    del_model_btn = gr.Button("❌ Delete", variant="stop")
+                    model_del_status = gr.Textbox(label="Result", interactive=False, lines=1)
             gr.Markdown("---")
             with gr.Row():
                 with gr.Column(scale=2):
-                    gr.Markdown("### 🔄 Обновление / скачивание голосовых моделей")
+                    gr.Markdown("### 🔄 Update / download voice models")
                     voice_model_sel = gr.Dropdown(
                         choices=get_voice_models_choices(),
-                        label="Выбрать модель для обновления",
+                        label="Select model to update",
                         allow_custom_value=True,
                         interactive=True
                     )
                     with gr.Row():
-                        update_one_model_btn = gr.Button("⬇️ Обновить выбранную", variant="primary")
-                        update_all_models_btn = gr.Button("⬇️⬇️ Обновить ВСЕ модели", variant="secondary")
+                        update_one_model_btn = gr.Button("⬇️ Update selected", variant="primary")
+                        update_all_models_btn = gr.Button("⬇️⬇️ Update ALL models", variant="secondary")
                     with gr.Row():
-                        check_models_btn = gr.Button("🔍 Проверить актуальность", variant="secondary")
-                        stop_model_btn = gr.Button("🛑 Прервать", variant="stop")
+                        check_models_btn = gr.Button("🔍 Check for updates", variant="secondary")
+                        stop_model_btn = gr.Button("🛑 Abort", variant="stop")
                 with gr.Column(scale=3):
                     voice_model_status = gr.Textbox(
-                        label="Статус обновления моделей",
+                        label="Model update status",
                         interactive=False, lines=10,
-                        placeholder="Выберите модель и нажмите «Обновить»..."
+                        placeholder="Select a model and click 'Update'..."
                     )
 
-        with gr.Tab("⚙️ Настройки"):
+        with gr.Tab("⚙️ Settings"):
             settings_tab(tts_state)
 
     # ==============================================================================
@@ -663,27 +663,27 @@ with gr.Blocks(title="FB2 to Speech (Enterprise Edition) 🇷🇺") as App:
     )
 
     load_project_dropdown.change(
-        fn=lambda name: (*load_existing_fb2(name), f"📂 Загружен: {name}" if name else ""),
+        fn=lambda name: (*load_existing_fb2(name), f"📂 Loaded: {name}" if name else ""),
         inputs=[load_project_dropdown],
         outputs=[fb2_title_input, fb2_text_input, editor_status]
     )
     clean_srt_btn.click(
-        fn=lambda t: (clean_srt_timings(t), "✂️ Таймкоды SRT удалены"),
+        fn=lambda t: (clean_srt_timings(t), "✂️ SRT timecodes removed"),
         inputs=fb2_text_input,
         outputs=[fb2_text_input, editor_status]
     )
     fb2_generate_btn.click(
-        fn=lambda r, b: (*create_fb2_file(r, b), gr.update(choices=sorted(get_data_list())), f"✨ Проект '{b}' создан и сохранён!"),
+        fn=lambda r, b: (*create_fb2_file(r, b), gr.update(choices=sorted(get_data_list())), f"✨ Project '{b}' created and saved!"),
         inputs=[fb2_text_input, fb2_title_input],
         outputs=[fb2_file_output, ab_path, load_project_dropdown, editor_status]
     )
     fb2_update_btn.click(
-        fn=lambda r, b: (*update_existing_fb2(r, b), f"🔄 Проект '{b}' перезаписан!"),
+        fn=lambda r, b: (*update_existing_fb2(r, b), f"🔄 Project '{b}' overwritten!"),
         inputs=[fb2_text_input, fb2_title_input],
         outputs=[fb2_file_output, ab_path, load_project_dropdown, editor_status]
     )
     fb2_delete_btn.click(
-        fn=lambda b: (*delete_created_file(b), f"🗑 Проект удалён" if b else "⚠️ Нечего удалять"),
+        fn=lambda b: (*delete_created_file(b), f"🗑 Project deleted" if b else "⚠️ Nothing to delete"),
         inputs=[fb2_title_input],
         outputs=[fb2_file_output, ab_path, editor_status]
     )
