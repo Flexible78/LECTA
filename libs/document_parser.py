@@ -12,7 +12,7 @@ def parse_and_save_document(file_path_str, remove_ru):
     ext = dropbox_path.suffix.lower()
     ab_name = re.sub(r'[^a-zA-Z0-9_\-а-яА-Я]', '', ab_name_raw) or "MyBook"
         
-    logger.info(f"📥 Начата обработка локального файла: {dropbox_path.name}")
+    logger.info(f"📥 Started processing local file: {dropbox_path.name}")
     
     ab_path = data_path / ab_name
     ab_path.mkdir(parents=True, exist_ok=True)
@@ -26,7 +26,7 @@ def parse_and_save_document(file_path_str, remove_ru):
     
     if ext == '.fb2':
         shutil.copy(file_path_str, destination_path)
-        logger.info(f"✅ Локальный файл '{ext}' успешно скопирован: {ab_name}")
+        logger.info(f"✅ Local file '{ext}' copied successfully: {ab_name}")
         return ab_name, None
 
     raw_text = ""
@@ -36,13 +36,13 @@ def parse_and_save_document(file_path_str, remove_ru):
             soup = BeautifulSoup(dropbox_path.read_text(encoding='utf-8', errors='ignore'), 'html.parser')
             raw_text = soup.get_text(separator='\n')
         except ImportError:
-            return None, "Установите библиотеку: pip install beautifulsoup4"
+            return None, "Install the library: pip install beautifulsoup4"
     elif ext == '.rtf':
         try:
             from striprtf.striprtf import rtf_to_text
             raw_text = rtf_to_text(dropbox_path.read_text(errors='ignore'))
         except ImportError:
-            return None, "Установите библиотеку: pip install striprtf"
+            return None, "Install the library: pip install striprtf"
     elif ext in ['.txt', '.md']:
         for enc in ['utf-8', 'utf-16', 'cp1251', 'latin-1']:
             try:
@@ -63,8 +63,8 @@ def parse_and_save_document(file_path_str, remove_ru):
                 return strings
             raw_text = "\n".join(extract_strings(data))
         except Exception as e:
-            logger.error(f"Ошибка чтения JSON: {e}")
-            return None, f"Ошибка чтения JSON: {e}"
+            logger.error(f"JSON read error: {e}")
+            return None, f"JSON read error: {e}"
     elif ext == '.csv':
         import csv
         try:
@@ -80,7 +80,7 @@ def parse_and_save_document(file_path_str, remove_ru):
                     t = page.extract_text()
                     if t: raw_text += t + "\n"
         except ImportError:
-            return None, "Установите библиотеку: pip install PyPDF2"
+            return None, "Install the library: pip install PyPDF2"
     elif ext == '.epub':
         try:
             import ebooklib
@@ -91,14 +91,14 @@ def parse_and_save_document(file_path_str, remove_ru):
                 if item.get_type() == ebooklib.ITEM_DOCUMENT:
                     raw_text += BeautifulSoup(item.get_content(), 'html.parser').get_text(separator='\n') + "\n"
         except ImportError:
-            return None, "Установите библиотеки: pip install EbookLib beautifulsoup4"
+            return None, "Install the libraries: pip install EbookLib beautifulsoup4"
     elif ext in ['.docx', '.doc']:
         if ext == '.docx':
             try:
                 import docx
                 raw_text = "\n".join([p.text for p in docx.Document(file_path_str).paragraphs])
             except ImportError:
-                return None, "Установите библиотеку: pip install python-docx"
+                return None, "Install the library: pip install python-docx"
         else:
             matches = re.findall(r'[А-Яа-яЁё0-9\s.,!?\-a-zA-Z]{4,}', dropbox_path.read_bytes().decode('cp1251', errors='ignore'))
             raw_text = "\n".join(matches)
@@ -124,5 +124,5 @@ def parse_and_save_document(file_path_str, remove_ru):
     fb2_template = f"<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<FictionBook xmlns=\"http://www.gribuser.ru/xml/fictionbook/2.0\">\n  <description><title-info><book-title>{ab_name}</book-title></title-info></description>\n  <body>{sections_xml}</body>\n</FictionBook>"
     destination_path.write_text(fb2_template, encoding="utf-8")
 
-    logger.info(f"✅ Локальный файл '{ext}' успешно сконвертирован в FB2: {ab_name}")
+    logger.info(f"✅ Local file '{ext}' successfully converted to FB2: {ab_name}")
     return ab_name, None

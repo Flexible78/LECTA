@@ -238,14 +238,14 @@ class FB2Processor:
 
     @staticmethod
     def save_xml(content: str, filename: str):
-        if not content: return "Содержимое пустое"
+        if not content: return "Content is empty"
         file_path = Path(filename)
         try:
             parser = etree.XMLParser(resolve_entities=False, no_network=True)
             etree.fromstring(content.encode("utf-8"), parser=parser)
             file_path.write_text(content, encoding="utf-8")
-            return f"Сохранено: {file_path.name}"
-        except Exception as e: return f"Ошибка: {str(e)}"
+            return f"Saved: {file_path.name}"
+        except Exception as e: return f"Error: {str(e)}"
 
     def process_book(
         self, ab_path: str, replace: bool = False, sound_effect: bool = True,
@@ -257,7 +257,7 @@ class FB2Processor:
         config.translit = translit
         
         if not ab_path:
-            yield 0, "❌ Ошибка: Проект не выбран"
+            yield 0, "❌ Error: No project selected"
             return
             
         work_dir = data_path / ab_path
@@ -266,18 +266,18 @@ class FB2Processor:
         xml_path.mkdir(parents=True, exist_ok=True)
 
         if not fb2_file.exists():
-            yield 0, f"❌ Файл {fb2_file} не найден"
+            yield 0, f"❌ File {fb2_file} not found"
             return
 
         try:
             root = self.remove_namespaces(fb2_file)
         except Exception as e:
-            yield 0, f"❌ Ошибка парсинга XML: {e}"
+            yield 0, f"❌ XML parsing error: {e}"
             return
 
         body = root.xpath("//body[not(@name)]")
         if not body:
-            yield 0, "❌ Нет основного body в FB2"
+            yield 0, "❌ No main body found in FB2"
             return
 
         metadata = self.extract_metadata(root)
@@ -287,14 +287,14 @@ class FB2Processor:
 
         for idx, section_dict in enumerate(sections, start=1):
             if self.stop_parsing:
-                yield int((idx / total_sections) * 100), "🛑 Прервано пользователем"
+                yield int((idx / total_sections) * 100), "🛑 Interrupted by user"
                 return
 
             (f_name, sect_data), = section_dict.items()
             xml_file = xml_path / f"{f_name}.xml"
 
             if xml_file.exists() and not replace:
-                yield int((idx / total_sections) * 100), f"🟡 Пропуск: {f_name}.xml существует"
+                yield int((idx / total_sections) * 100), f"🟡 Skipping: {f_name}.xml already exists"
                 continue
 
             element = sect_data["sect"]
@@ -347,6 +347,6 @@ class FB2Processor:
                 xml_path.mkdir(parents=True, exist_ok=True)
                 tree.write(str(xml_file), encoding="utf-8", pretty_print=True)
 
-            yield int((idx / total_sections) * 100), f"✅ Обработано: {f_name}"
+            yield int((idx / total_sections) * 100), f"✅ Processed: {f_name}"
             
-        yield 100, "🎉 Готово"
+        yield 100, "🎉 Done"
