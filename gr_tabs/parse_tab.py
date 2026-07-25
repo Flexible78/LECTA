@@ -56,7 +56,7 @@ def get_all_projects_xml(ab_path=None):
             continue
         for f in get_data_list(xml_dir, "*.xml", sort=safe_sort):
             rows.append([f"{project_dir.name} / {f}.xml"])
-    return rows if rows else [["⚠️ Нет XML-файлов ни в одном проекте"]]
+    return rows if rows else [["⚠️ No XML files in any project"]]
 
 def show_file_content(data: gr.SelectData, ab_path: str):
     if not ab_path or str(ab_path).startswith('<gradio'): 
@@ -76,9 +76,9 @@ def show_file_content(data: gr.SelectData, ab_path: str):
         if file_path.exists():
             content = file_path.read_text(encoding="utf-8")
             return content, gr.update(interactive=True), str(file_path)
-        return f"Файл не найден: {file_name}", gr.update(interactive=False), ""
+        return f"File not found: {file_name}", gr.update(interactive=False), ""
     except Exception as e:
-        return f"Ошибка: {str(e)}", gr.update(interactive=False), ""
+        return f"Error: {str(e)}", gr.update(interactive=False), ""
 
 def del_file(filename: str, ab_path: str):
     if not filename or not ab_path: 
@@ -86,13 +86,13 @@ def del_file(filename: str, ab_path: str):
     file_path = Path(filename)
     if file_path.exists():
         file_path.unlink()
-        logger.info(f"🗑 Удален XML файл: {file_path.name}")
-        gr.Info(f"Удалён: {file_path.name}", duration=2)
+        logger.info(f"🗑 Deleted XML file: {file_path.name}")
+        gr.Info(f"Deleted: {file_path.name}", duration=2)
     return get_all_projects_xml(), ""
 
 def magic_clean_xml(content, ab_path, cur_file):
     if not content or not cur_file: 
-        return content, "⚠️ Сначала выбери файл в таблице слева!"
+        return content, "⚠️ Select a file in the table on the left first!"
         
     clean_album = re.sub(r'[\W_]*\d{6,}[\W_]*\d*$', '', ab_path)
     if len(clean_album) > 35: 
@@ -118,10 +118,10 @@ def magic_clean_xml(content, ab_path, cur_file):
     
     try:
         Path(cur_file).write_text(content, encoding='utf-8')
-        gr.Info("✨ Очистка: мусора нет, пустых строк нет!", duration=3)
-        return content, "✨ Очищено и СОХРАНЕНО!"
+        gr.Info("✨ Cleanup: no junk, no empty lines!", duration=3)
+        return content, "✨ Cleaned and SAVED!"
     except Exception as e:
-        return content, f"❌ Ошибка сохранения: {e}"
+        return content, f"❌ Save error: {e}"
 
 def parse_fb2_wrapper(
     ab_path: str, replace: bool, ch_size: int, gender: bool, sound_effect: bool,
@@ -129,8 +129,8 @@ def parse_fb2_wrapper(
     remove_ru: bool, is_english: bool, translate: bool, auto_clean_xml: bool
 ):
     if not ab_path or str(ab_path).startswith('<gradio'):
-        gr.Warning("Пожалуйста, выберите проект из списка сверху!")
-        yield [], get_parse_metrics_html(0, "Ошибка"), "❌ Ошибка: Проект не выбран"
+        gr.Warning("Please select a project from the list above!")
+        yield [], get_parse_metrics_html(0, "Error"), "❌ Error: No project selected"
         return
 
     AppConfig.save_user_settings({
@@ -144,7 +144,7 @@ def parse_fb2_wrapper(
     xml_dir = data_path / str(ab_path) / "xml"
     xml_dir.mkdir(parents=True, exist_ok=True)
 
-    yield get_xml_files(ab_path), get_parse_metrics_html(0, "Инициализация..."), "Инициализация..."
+    yield get_xml_files(ab_path), get_parse_metrics_html(0, "Initializing..."), "Initializing..."
 
     try:
         # Процессор теперь возвращает процент и сообщение!
@@ -155,7 +155,7 @@ def parse_fb2_wrapper(
             yield get_xml_files(ab_path), get_parse_metrics_html(percent, status_msg), status_msg
             
         if auto_clean_xml:
-            yield get_xml_files(ab_path), get_parse_metrics_html(95, "Очистка XML..."), "✨ Авто-очистка: убираю мусор..."
+            yield get_xml_files(ab_path), get_parse_metrics_html(95, "Cleaning XML..."), "✨ Auto-cleanup: removing junk..."
             clean_album = re.sub(r'[\W_]*\d{6,}[\W_]*\d*$', '', ab_path)
             if len(clean_album) > 35: clean_album = clean_album[:35] + "..."
             if not clean_album: clean_album = ab_path[:20]
@@ -177,72 +177,72 @@ def parse_fb2_wrapper(
                 
                 xml_file.write_text(content, encoding='utf-8')
 
-        msg = "🛑 Остановлено пользователем" if processor.stop_parsing else "✅ Завершено"
+        msg = "🛑 Stopped by user" if processor.stop_parsing else "✅ Completed"
         yield get_xml_files(ab_path), get_parse_metrics_html(100, msg), msg
         if not processor.stop_parsing:
             _play_done_sound()
     except Exception as e:
-        logger.error(f"Ошибка: {e}", exc_info=True)
-        yield get_xml_files(ab_path), get_parse_metrics_html(0, "Ошибка"), f"❌ Ошибка: {e}"
+        logger.error(f"Error: {e}", exc_info=True)
+        yield get_xml_files(ab_path), get_parse_metrics_html(0, "Error"), f"❌ Error: {e}"
 
 def stop_parse():
     if processor: 
         processor.stop_parse()
-    return get_parse_metrics_html(100, "Прерывание..."), "🛑 Останавливаем..."
+    return get_parse_metrics_html(100, "Interrupting..."), "🛑 Stopping..."
 
 def parse_tab(ab_path, acc_state, tts_state):
-    with gr.Tab("🔍 АНАЛИЗ") as pr_tab:
-        gr.Markdown("После смены TTS модели **обязательно** заново обработайте fb2.")
+    with gr.Tab("🔍 ANALYZE") as pr_tab:
+        gr.Markdown("After changing the TTS model, you **must** re-process the fb2.")
         
         with gr.Row():
             with gr.Column(scale=2):
-                sound_effect = gr.Checkbox(label="Озвучить события", value=False)
-                single_vowel = gr.Checkbox(label="мАсквич", value=False)
-                remove_ru = gr.Checkbox(label="🚫 Очистить от русского текста", value=False)
-                is_english = gr.Checkbox(label="🇬🇧 Английский текст (Без русификации чисел)", value=False)
-                gender = gr.Checkbox(label="Определение пола", interactive=False, value=False, visible=False)
-                profanity = gr.Checkbox(label="Запикать мат", interactive=False, value=False, visible=False)
+                sound_effect = gr.Checkbox(label="Voice events", value=False)
+                single_vowel = gr.Checkbox(label="Moskvich", value=False)
+                remove_ru = gr.Checkbox(label="🚫 Remove Russian text", value=False)
+                is_english = gr.Checkbox(label="🇬🇧 English text (no number russification)", value=False)
+                gender = gr.Checkbox(label="Gender detection", interactive=False, value=False, visible=False)
+                profanity = gr.Checkbox(label="Bleep profanity", interactive=False, value=False, visible=False)
             
             with gr.Column(scale=2):
-                translit = gr.Checkbox(label="Транслит", value=False)
-                translate = gr.Checkbox(label="🌐 Переводить на русский", value=False)
-                accent = gr.Checkbox(label="Расставить ударения", interactive=False, value=False)
-                repl = gr.Checkbox(label="Перезаписать старые файлы", value=True)
-                auto_clean = gr.Checkbox(label="✨ Авто-очистка XML (Мусор + Имя + Старт 3с)", value=True)
-                bilingual = gr.Checkbox(label="Мультиязычность", interactive=False, value=False, visible=False)
+                translit = gr.Checkbox(label="Translit", value=False)
+                translate = gr.Checkbox(label="🌐 Translate to Russian", value=False)
+                accent = gr.Checkbox(label="Add stress marks", interactive=False, value=False)
+                repl = gr.Checkbox(label="Overwrite old files", value=True)
+                auto_clean = gr.Checkbox(label="✨ Auto-clean XML (Junk + Name + 3s intro)", value=True)
+                bilingual = gr.Checkbox(label="Multilingual", interactive=False, value=False, visible=False)
         
         with gr.Row():
             with gr.Column(scale=4):
-                punctuation = gr.Checkbox(label="Удалить знаки препинания", value=False)
-                ch_size = gr.Slider(50, 400, 400, step=10, label="Длина строки", interactive=True)
+                punctuation = gr.Checkbox(label="Remove punctuation", value=False)
+                ch_size = gr.Slider(50, 400, 400, step=10, label="Line length", interactive=True)
             
             with gr.Column(scale=1):
-                parse_btn = gr.Button("▶ Обработать текст (Ctrl+Enter)", variant="primary", elem_id="parse_btn")
-                stop_btn = gr.Button("🚫 Прервать (Esc)")
+                parse_btn = gr.Button("▶ Process text (Ctrl+Enter)", variant="primary", elem_id="parse_btn")
+                stop_btn = gr.Button("🚫 Stop (Esc)")
         
         with gr.Row():
-            metrics_panel = gr.HTML(value=get_parse_metrics_html(0, "Ожидание..."))
+            metrics_panel = gr.HTML(value=get_parse_metrics_html(0, "Waiting..."))
             
         with gr.Group(elem_id="log_group"):
-            status = gr.Textbox(label="Живой лог", show_label=True, lines=1, interactive=False)
+            status = gr.Textbox(label="Live log", show_label=True, lines=1, interactive=False)
         
         with gr.Row():
             with gr.Column(scale=1, min_width=150):
-                refresh_btn = gr.Button("🔄 Обновить список XML")
-                df_output = gr.DataFrame(headers=['Имя файла'], value=[], interactive=False, max_height=720, type='array')
-                del_btn = gr.Button("❌ Удалить файл (Delete)", interactive=False, elem_id="del_file_btn")
+                refresh_btn = gr.Button("🔄 Refresh XML list")
+                df_output = gr.DataFrame(headers=['File name'], value=[], interactive=False, max_height=720, type='array')
+                del_btn = gr.Button("❌ Delete file (Delete)", interactive=False, elem_id="del_file_btn")
             
             with gr.Column(scale=5, min_width=500):
-                file_content = gr.Textbox(label="Содержимое файла (с переносом слов)", interactive=True, lines=25, max_lines=40)
+                file_content = gr.Textbox(label="File content (with word wrap)", interactive=True, lines=25, max_lines=40)
                 
                 with gr.Row():
-                    save_btn = gr.Button("📝 Ручное сохранение (Ctrl+S)", elem_id="save_xml_btn")
-                    magic_clean_btn = gr.Button("✨ Ручная Авто-Очистка", variant="secondary")
+                    save_btn = gr.Button("📝 Manual save (Ctrl+S)", elem_id="save_xml_btn")
+                    magic_clean_btn = gr.Button("✨ Manual Auto-Clean", variant="secondary")
                 
                 cur_file = gr.State()
 
     parse_btn.click(
-        fn=lambda: (gr.update(value="⏳ Инициализация..."), get_parse_metrics_html(0, "Запуск...")), 
+        fn=lambda: (gr.update(value="⏳ Initializing..."), get_parse_metrics_html(0, "Starting...")), 
         outputs=[status, metrics_panel]
     ).then(
         fn=parse_fb2_wrapper,
