@@ -395,7 +395,7 @@ async def handle_claude_request(request: Request):
         system = " ".join(b.get("text", "") for b in system if b.get("type") == "text")
     # Remove billing header noise to reduce token count
     system = re.sub(r"x-anthropic-billing-header:[^\n]+\n?", "", system).strip()
-    system_text = (system + "\nВсегда отвечай на русском языке.").strip()
+    system_text = (system + "\nAlways answer in English.").strip()
 
     creds = get_credentials()
     token = creds.token

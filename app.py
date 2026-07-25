@@ -399,8 +399,23 @@ document.addEventListener('keydown', function(e) {
 </script>
 """
 
-with gr.Blocks(title="FB2 to Speech (Enterprise Edition) 🇷🇺") as App:
+with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew") as App:
     gr.HTML(global_shortcuts, visible=False)
+    gr.Markdown(
+        "<div style='text-align:center; margin-bottom:8px;'>"
+        "<h1 style='margin:0; color:#38bdf8;'>LECTA</h1>"
+        "<p style='margin:2px 0; color:#94a3b8; font-size:14px;'>"
+        "Text-to-Speech for Russian, English and Hebrew"
+        "</p>"
+        "<p style='margin:2px 0; color:#64748b; font-size:12px;'>"
+        "<a href='https://github.com/Flexible78/KATAV' style='color:#64748b;'>KATAV writes, LECTA reads.</a>"
+        "&nbsp;&nbsp;|&nbsp;&nbsp;"
+        "Built on <a href='https://gitverse.ru/diger/fb2tts' style='color:#64748b;'>fb2tts</a> by diger"
+        "&nbsp;&nbsp;|&nbsp;&nbsp;"
+        "<a href='https://github.com/Flexible78/LECTA' style='color:#64748b;'>GitHub</a>"
+        "</p>"
+        "</div>"
+    )
     
     tts_state = gr.State()
     acc_state = gr.State()
@@ -566,7 +581,7 @@ with gr.Blocks(title="FB2 to Speech (Enterprise Edition) 🇷🇺") as App:
                 noise_lvl = gr.Slider(0, 64, 16, step=1, label="Noise level", interactive=True)
                 pitch_sel = gr.Slider(0, 100, 50, step=1, label="Pitch", interactive=True)
             with gr.Row():
-                text_input = gr.Textbox(label='Текст', lines=2, placeholder="English | עברית | Русский", interactive=True, max_length=220)
+                text_input = gr.Textbox(label='Text', lines=2, placeholder="English | עברית | Русский", interactive=True, max_length=220)
                 audio_output = gr.Audio(interactive=False, buttons=[])
             with gr.Row():
                 accent_button = gr.Button("Add stress marks", interactive=False, elem_classes=["fixed-height-btn"])
