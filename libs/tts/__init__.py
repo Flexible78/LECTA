@@ -51,7 +51,7 @@ def set_tts_device(mode):
     """Устанавливает режим устройства: 'auto' (GPU) или 'cpu' (RAM)."""
     global _tts_device_mode
     _tts_device_mode = mode
-    return f"{'🎮 GPU (CUDA)' if mode != 'cpu' else '💾 CPU (RAM)'} режим активирован"
+    return f"{'GPU (CUDA)' if mode != 'cpu' else 'CPU (RAM)'} mode activated"
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 now_dir = Path.cwd()
@@ -78,11 +78,11 @@ class TTSModel:
             model_ver = '0.10'
             try:
                 self.model = Model(model_ver)
-                return ver, "Модель успешно загружена!"
+                return ver, "Model loaded successfully!"
             except Exception as e:
                 if isinstance(e, FileNotFoundError) or "No such file" in str(e):
                     return None, f"Failed to load model: {e}.{_model_not_found_hint()}"
-                return None, f"Ошибка инициализации: {e}"
+                return None, f"Initialization error: {e}"
         elif ver in [3, 4, 7]:
             # Обновляем устройство при каждой загрузке (пользователь мог переключить GPU/CPU)
             self.device = torch.device(get_device())
@@ -100,7 +100,7 @@ class TTSModel:
             model_path = model_dir / model_name
             if not model_path.is_file():
                 model_dir.mkdir(exist_ok=True)
-                print(f'Загрузка Silero TTS ({lang})...')
+                print(f'Loading Silero TTS ({lang})...')
                 model_url = f"https://models.silero.ai/models/tts/{lang}/{model_name}"
                 m, status = download_model(model_url, model_path)
                 if m is None:
@@ -109,20 +109,20 @@ class TTSModel:
                 package = torch.package.PackageImporter(str(model_path))
                 self.model = package.load_pickle("tts_models", "model")
                 self.model.to(self.device)
-                return ver, "Модель успешно загружена!"
+                return ver, "Model loaded successfully!"
             except Exception as e:
                 if isinstance(e, FileNotFoundError) or "No such file" in str(e):
                     return None, f"Failed to load model: {e}.{_model_not_found_hint()}"
-                return None, f"Ошибка загрузки модели: {e}"
+                return None, f"Model loading error: {e}"
         else:
             try:
                 self.model = F5Model()
                 self.model.load(model_ver=ver)
-                return ver, "Модель успешно загружена!"
+                return ver, "Model loaded successfully!"
             except Exception as e:
                 if isinstance(e, FileNotFoundError) or "No such file" in str(e):
                     return None, f"Failed to load model: {e}.{_model_not_found_hint()}"
-                return None, f"Ошибка инициализации: {e}"
+                return None, f"Initialization error: {e}"
     
     def synth_audio(self, text, speaker_id, speed=1, noise=16, ref_audio=None, ref_text=''):
         if self.ver in [3, 4, 7]:

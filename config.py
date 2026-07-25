@@ -49,11 +49,11 @@ class AppConfig:
 
     @staticmethod
     def parse_args():
-        parser = argparse.ArgumentParser(description="Параметры запуска TTS-сервера")
-        parser.add_argument("--port", type=int, default=int(os.getenv("LECTA_PORT", "7860")), help="Порт для запуска сервера")
-        parser.add_argument("--share", action="store_true", help="Создать публичную ссылку")
-        parser.add_argument("--debug", action="store_true", help="Режим отладки")
-        parser.add_argument("--server-name", type=str, default="0.0.0.0", help="Адрес сервера")
+        parser = argparse.ArgumentParser(description="LECTA TTS server launch options")
+        parser.add_argument("--port", type=int, default=int(os.getenv("LECTA_PORT", "7860")), help="Port to run the server on")
+        parser.add_argument("--share", action="store_true", help="Create a public share link")
+        parser.add_argument("--debug", action="store_true", help="Debug mode")
+        parser.add_argument("--server-name", type=str, default="0.0.0.0", help="Server bind address")
         args = parser.parse_args()
         
         return AppConfig(
