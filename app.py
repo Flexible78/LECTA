@@ -581,7 +581,7 @@ with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew")
                 noise_lvl = gr.Slider(0, 64, 16, step=1, label="Noise level", interactive=True)
                 pitch_sel = gr.Slider(0, 100, 50, step=1, label="Pitch", interactive=True)
             with gr.Row():
-                text_input = gr.Textbox(label='Text', lines=2, placeholder="English | עברית | Русский", interactive=True, max_length=220)
+                text_input = gr.Textbox(label='Text', lines=2, placeholder="English | עברית | Russian", interactive=True, max_length=220)
                 audio_output = gr.Audio(interactive=False, buttons=[])
             with gr.Row():
                 accent_button = gr.Button("Add stress marks", interactive=False, elem_classes=["fixed-height-btn"])

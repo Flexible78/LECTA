@@ -118,7 +118,7 @@ def extract_and_translate(text, src_langs_ui, tgt_langs_ui, min_length, include_
     clean_sent_text = clean_text.replace('\n', ' ')
     sentences = re.split(r'(?<=[.!?])\s+', clean_sent_text)
     
-    lang_codes = {"Английский (en)": "en", "Иврит (he)": "iw", "Русский (ru)": "ru"}
+    lang_codes = {"English (en)": "en", "Hebrew (he)": "iw", "Russian (ru)": "ru"}
     src_langs = [lang_codes[l] for l in src_langs_ui]
     tgt_langs = [lang_codes[l] for l in tgt_langs_ui]
         
@@ -210,8 +210,8 @@ def vocab_tab(ab_path_box=None, file_content_box=None):
             with gr.Column(scale=2):
                 input_text = gr.Textbox(label="Source text", lines=15, max_lines=20)
             with gr.Column(scale=1):
-                src_langs = gr.CheckboxGroup(["Английский (en)", "Иврит (he)", "Русский (ru)"], label="SOURCE languages", value=["Английский (en)"])
-                tgt_langs = gr.CheckboxGroup(["Русский (ru)", "Английский (en)", "Иврит (he)"], label="TARGET languages", value=["Русский (ru)", "Иврит (he)"])
+                src_langs = gr.CheckboxGroup(["English (en)", "Hebrew (he)", "Russian (ru)"], label="SOURCE languages", value=["English (en)"])
+                tgt_langs = gr.CheckboxGroup(["Russian (ru)", "English (en)", "Hebrew (he)"], label="TARGET languages", value=["Russian (ru)", "Hebrew (he)"])
                 min_len = gr.Slider(minimum=1, maximum=15, value=4, step=1, label="Minimum word length")
                 
                 with gr.Group():
