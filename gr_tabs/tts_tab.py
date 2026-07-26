@@ -3,6 +3,7 @@ import random
 import re
 import tempfile
 import time
+from collections import deque
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 import threading
@@ -385,8 +386,10 @@ def tts(
         except ValueError:
             return (1, x.lower())
 
-    global_start_time = time.time()
+    global_start_time = time.monotonic()
     current_line = 0
+    recent_line_times = deque(maxlen=20)
+    last_progress_update = 0.0
 
     yield (
         cached_files_list,
@@ -425,12 +428,14 @@ def tts(
                 current_line += len(etree.parse(str(x_file)).getroot())
             except:
                 pass
+            elapsed = time.monotonic() - global_start_time
+            pct = min(99, int(current_line / total_lines * 100))
             yield (
                 cached_files_list,
                 f"⏭ Skip: {short_final}.mp3 already exists",
                 get_metrics_html(
-                    int((current_line / total_lines) * 100),
-                    format_time_hms(time.time() - global_start_time),
+                    pct,
+                    format_time_hms(elapsed),
                     "00:00",
                     "-",
                 ),
@@ -439,7 +444,7 @@ def tts(
             )
             continue
 
-        file_start_time = time.time()
+        file_start_time = time.monotonic()
         xml_file = xml_path / f"{file}.xml"
         root = etree.parse(str(xml_file)).getroot()
         autor = root.get("autor")
@@ -483,16 +488,51 @@ def tts(
 
             current_line += 1
 
-            if current_line % 3 == 0 or current_line == total_lines:
-                elapsed = time.time() - global_start_time
+            # Track line timing for rolling average calculations
+            now = time.monotonic()
+            recent_line_times.append((current_line, now))
+
+            # Throttle: update at most 2x/sec, at least once per 2 sec, always on last line
+            should_update = (current_line == total_lines)
+            if not should_update and current_line % 3 == 0:
+                should_update = (now - last_progress_update >= 0.5)
+            if now - last_progress_update >= 2.0:
+                should_update = True
+
+            if should_update:
+                last_progress_update = now
+                elapsed = now - global_start_time
+
+                # Compute speed from recent 20 lines (or fewer) for accurate remaining estimate
+                if len(recent_line_times) >= 2:
+                    first = recent_line_times[0]
+                    latest = recent_line_times[-1]
+                    recent_lines = latest[0] - first[0]
+                    recent_time = latest[1] - first[1]
+                    recent_speed = recent_lines / recent_time if recent_time > 0 else 0
+                else:
+                    recent_speed = 0
+
+                # Overall speed for display
                 speed = current_line / elapsed if elapsed > 0 else 0
-                rem_sec = (total_lines - current_line) / speed if speed > 0 else 0
-                pct = int((current_line / total_lines) * 100)
+
+                # Remaining: use recent speed if available
+                remaining_lines = total_lines - current_line
+                if len(recent_line_times) < 3:
+                    rem_str = "Calculating..."
+                elif recent_speed > 0:
+                    rem_sec = remaining_lines / recent_speed
+                    rem_str = format_time_hms(rem_sec)
+                else:
+                    rem_str = "Calculating..."
+
+                # Cap at 99% until final file is actually written
+                pct = min(99, int(current_line / total_lines * 100))
 
                 html = get_metrics_html(
                     pct,
                     format_time_hms(elapsed),
-                    format_time_hms(rem_sec),
+                    rem_str,
                     f"{speed:.1f} lines/s",
                 )
                 log_txt = f"▶ Working: {file}.xml\n🎙 Synthesizing line: {current_line} of {total_lines}..."
@@ -570,32 +610,51 @@ def tts(
 
         # ── ПЕРФ: разрешаем все отложенные задачи синтеза (futures) ──
         text_task_count = sum(1 for t in pending_tasks if "future" in t)
-        for task in pending_tasks:
-            if task["type"] == "text":
-                sr, np_audio, elapsed = task["future"].result()
-                chunk_timings.append(elapsed)
-                audio_segments.append(_tts_to_audio(np_audio, sr))
-            elif task["type"] == "text_inline":
-                sr, np_audio, elapsed = task["future"].result()
-                chunk_timings.append(elapsed)
-                audio = _tts_to_audio(np_audio, sr)
-                if task.get("cite"):
-                    audio = add_reverb(audio)
-                    if task.get("cite_position") == "start":
-                        pr = AudioSegment.from_wav(sound_dir / "pause" / "min_cite.wav")
+        synthesis_failed = False
+        try:
+            for task in pending_tasks:
+                if task["type"] == "text":
+                    sr, np_audio, elapsed = task["future"].result()
+                    chunk_timings.append(elapsed)
+                    audio_segments.append(_tts_to_audio(np_audio, sr))
+                elif task["type"] == "text_inline":
+                    sr, np_audio, elapsed = task["future"].result()
+                    chunk_timings.append(elapsed)
+                    audio = _tts_to_audio(np_audio, sr)
+                    if task.get("cite"):
+                        audio = add_reverb(audio)
+                        if task.get("cite_position") == "start":
+                            pr = AudioSegment.from_wav(sound_dir / "pause" / "min_cite.wav")
+                            pr = effects.normalize(pr)
+                            audio = pr + audio
+                    if task.get("empty_line"):
+                        pr = AudioSegment.from_wav(sound_dir / "pause" / "empty.wav")
                         pr = effects.normalize(pr)
                         audio = pr + audio
-                if task.get("empty_line"):
-                    pr = AudioSegment.from_wav(sound_dir / "pause" / "empty.wav")
-                    pr = effects.normalize(pr)
-                    audio = pr + audio
-                audio_segments.append(audio)
-            elif task["type"] == "sound":
-                sf = sound_dir / "events" / f"{task['value']}.wav"
-                audio_segments.append(effects.normalize(AudioSegment.from_wav(str(sf))))
-            elif task["type"] == "break":
-                slt = task["time"] * 100
-                audio_segments.append(AudioSegment.silent(duration=slt))
+                    audio_segments.append(audio)
+                elif task["type"] == "sound":
+                    sf = sound_dir / "events" / f"{task['value']}.wav"
+                    audio_segments.append(effects.normalize(AudioSegment.from_wav(str(sf))))
+                elif task["type"] == "break":
+                    slt = task["time"] * 100
+                    audio_segments.append(AudioSegment.silent(duration=slt))
+        except Exception:
+            synthesis_failed = True
+
+        if synthesis_failed:
+            yield (
+                get_files_list(ab_path),
+                f"❌ Failed! Error in {short_final}.xml",
+                get_metrics_html(
+                    min(99, int(current_line / total_lines * 100)) if total_lines > 0 else 0,
+                    format_time_hms(time.monotonic() - global_start_time),
+                    "-",
+                    f"failed at {current_line} of {total_lines}",
+                ),
+                gr.update(),
+                _build_file_index(ab_path, get_files_list(ab_path)),
+            )
+            return
 
         # ПЕРФ: лог параллельного синтеза
         if chunk_timings:
@@ -656,21 +715,21 @@ def tts(
 
         last_final_mp3_path = str(mp3_file)
 
-        elapsed_file = time.time() - file_start_time
+        elapsed_file = time.monotonic() - file_start_time
         parse_times[str(saved_stem)] = elapsed_file
         with open(times_file, "w", encoding="utf-8") as f:
             json.dump(parse_times, f)
 
         if was_interrupted:
-            pct = int((current_line / total_lines) * 100) if total_lines > 0 else 0
+            pct = min(99, int(current_line / total_lines * 100)) if total_lines > 0 else 0
             yield (
                 get_files_list(ab_path),
                 f"🛑 Stopped! Partial file saved as {short_final}_PARTIAL.mp3",
                 get_metrics_html(
                     pct,
-                    format_time_hms(time.time() - global_start_time),
+                    format_time_hms(time.monotonic() - global_start_time),
                     "-",
-                    "Stopped",
+                    f"stopped at {current_line} of {total_lines}",
                 ),
                 _safe_audio(last_final_mp3_path),
                 _build_file_index(ab_path, get_files_list(ab_path)),
@@ -680,30 +739,40 @@ def tts(
         # Обновляем кэш после сохранения нового файла
         cached_files_list = get_files_list(ab_path)
         # Вывод об обновлении файла (если не прервано)
+        elapsed_now = time.monotonic() - global_start_time
+        pct = min(99, int(current_line / total_lines * 100))
+        overall_speed = current_line / elapsed_now if elapsed_now > 0 else 0
+        remaining_lines = total_lines - current_line
+        if len(recent_line_times) >= 3:
+            first_rt = recent_line_times[0]
+            latest_rt = recent_line_times[-1]
+            recent_lines_rt = latest_rt[0] - first_rt[0]
+            recent_time_rt = latest_rt[1] - first_rt[1]
+            rec_spd = recent_lines_rt / recent_time_rt if recent_time_rt > 0 else overall_speed
+        else:
+            rec_spd = overall_speed
+        rem_str = format_time_hms(remaining_lines / rec_spd) if rec_spd > 0 else "Calculating..."
         yield (
             cached_files_list,
             f"✅ Saved: {short_final}.mp3",
             get_metrics_html(
-                int((current_line / total_lines) * 100),
-                format_time_hms(time.time() - global_start_time),
-                format_time_hms(
-                    (total_lines - current_line)
-                    / (current_line / (time.time() - global_start_time))
-                ),
+                pct,
+                format_time_hms(elapsed_now),
+                rem_str,
                 "-",
             ),
             _safe_audio(last_final_mp3_path),
             _build_file_index(ab_path, cached_files_list),
         )
 
-    # ФИНАЛ
+    # ФИНАЛ — only now can we show 100%
     _synthesis_completed = True
     gr.Info("Done")
     yield (
         cached_files_list,
         "🎉 ALL FILES SUCCESSFULLY SYNTHESIZED!",
         get_metrics_html(
-            100, format_time_hms(time.time() - global_start_time), "00:00", "-"
+            100, format_time_hms(time.monotonic() - global_start_time), "00:00", "-"
         ),
         _safe_audio(last_final_mp3_path),
         _build_file_index(ab_path, cached_files_list),
@@ -1127,8 +1196,23 @@ def batch_tts_all_projects(
     _synthesis_completed = False
 
     total = len(all_projects)
-    global_start = time.time()
+
+    # --- Pre-scan total lines across all projects for accurate batch progress ---
+    total_lines_batch = 0
+    for project in all_projects:
+        xml_dir = data_path / project / "xml"
+        if xml_dir.exists():
+            for xf in xml_dir.glob("*.xml"):
+                try:
+                    total_lines_batch += len(etree.parse(str(xf)).getroot())
+                except Exception:
+                    pass
+
+    global_start = time.monotonic()
+    batch_recent_line_times = deque(maxlen=20)
+    batch_last_progress_update = 0.0
     processed_count = 0
+    batch_current_line = 0
     all_files = []  # НАКАПЛИВАЕМ MP3 ВСЕХ ПРОЕКТОВ
     batch_stats = []  # для финальной сводной таблицы
     batch_file_index = {}  # display_name -> absolute_mp3_path
@@ -1147,9 +1231,10 @@ def batch_tts_all_projects(
         parse_translit = True
         parse_sound_effect = False
 
+    prep_msg = "Preparing..." if total_lines_batch == 0 else f"📦 Preparing {total} projects ({total_lines_batch} lines)..."
     yield (
         [],
-        f"📦 Preparing {total} projects...",
+        prep_msg,
         get_batch_metrics_html("Preparing...", 0, 0, total, 0, "00:00", "...", "..."),
         gr.update(),
         batch_file_index,
@@ -1160,19 +1245,19 @@ def batch_tts_all_projects(
     for idx, project in enumerate(all_projects, 1):
         if stop_text_to_sp:
             stop_text_to_sp = False
-            elapsed = time.time() - global_start
-            pct = int(processed_count / total * 100) if total > 0 else 0
+            elapsed = time.monotonic() - global_start
+            pct = min(99, int(processed_count / total * 100)) if total > 0 else 0
 
             # Показываем частичную сводку по завершённым проектам
             partial_html = get_batch_metrics_html(
-                project,
+                f"stopped at {processed_count} of {total}",
                 0,
                 idx,
                 total,
                 pct,
                 format_time_hms(elapsed),
                 "-",
-                "Остановлено",
+                "Stopped",
             )
             if batch_stats:
                 partial_html = get_batch_summary_html(batch_stats) + "\n" + partial_html
@@ -1220,7 +1305,7 @@ def batch_tts_all_projects(
         # Авто-парсинг FB2 если XML ещё нет
         if not has_xml:
             batch_pre_pct = int((idx - 1) / total * 100)
-            elapsed = time.time() - global_start
+            elapsed = time.monotonic() - global_start
             speed = idx / elapsed if elapsed > 0 else 0
             rem = max(0, (total - idx) / speed) if speed > 0 else 0
             sec_per_proj = max(0, 1 / speed) if speed > 0 else 0
@@ -1228,7 +1313,7 @@ def batch_tts_all_projects(
                 all_files,
                 f"📁 [{idx}/{total}] {project}: Parsing FB2 → XML...",
                 get_batch_metrics_html(
-                        project,
+                        f"project {idx} of {total} — {project}",
                         0,
                         idx,
                         total,
@@ -1308,7 +1393,7 @@ def batch_tts_all_projects(
                     all_files,
                     f"⚠️ [{idx}/{total}] {project}: Parse error: {e}",
                     get_batch_metrics_html(
-                        project,
+                        f"project {idx} of {total} — {project}",
                         0,
                         idx,
                         total,
@@ -1323,7 +1408,7 @@ def batch_tts_all_projects(
                 continue
 
         # Запуск TTS для проекта
-        proj_start = time.time()
+        proj_start = time.monotonic()
         for tts_result in tts(
             project,
             repl,
@@ -1343,30 +1428,69 @@ def batch_tts_all_projects(
             # Извлекаем процент текущего проекта из HTML tts()
             project_pct = parse_percent_from_html(tts_html)
 
+            # Track batch-level line timing for rolling average
+            now_batch = time.monotonic()
+
+            # Estimate lines done so far from percentages
+            if total_lines_batch > 0:
+                # Completed projects' lines + estimated fraction of current
+                batch_current_line = int(((idx - 1) + project_pct / 100) / total * total_lines_batch)
+                batch_recent_line_times.append((batch_current_line, now_batch))
+
+            # Throttle batch progress updates
+            should_update_batch = (
+                (idx == total and project_pct >= 100)
+                or (now_batch - batch_last_progress_update >= 0.5)
+            )
+            if now_batch - batch_last_progress_update >= 2.0:
+                should_update_batch = True
+
+            if not should_update_batch:
+                continue
+
+            batch_last_progress_update = now_batch
+
             # Общий прогресс: (завершённые проекты + доля текущего) / всего
-            batch_pct = int(((idx - 1) + project_pct / 100) / total * 100)
+            batch_pct = min(99, int(((idx - 1) + project_pct / 100) / total * 100))
 
-            elapsed = time.time() - global_start
-            # Оценка оставшегося времени: пропорционально оставшимся проектам
-            projects_done = (idx - 1) + project_pct / 100
-            speed_proj = projects_done / elapsed if elapsed > 0 else 0
-            rem_sec = max(0, (total - projects_done) / speed_proj) if speed_proj > 0 else 0
+            elapsed = now_batch - global_start
 
-            # Формат скорости: если проектов в секунду < 0.01, показываем мин/проект
-            if speed_proj > 0.01:
-                speed_str = f"{speed_proj:.2f} proj/s"
+            # Compute batch-level speed from recent lines for accurate remaining
+            if total_lines_batch > 0 and len(batch_recent_line_times) >= 3:
+                first_bt = batch_recent_line_times[0]
+                latest_bt = batch_recent_line_times[-1]
+                batch_recent_lines = latest_bt[0] - first_bt[0]
+                batch_recent_time = latest_bt[1] - first_bt[1]
+                batch_recent_speed = batch_recent_lines / batch_recent_time if batch_recent_time > 0 else 0
+                rem_sec = ((total_lines_batch - batch_current_line) / batch_recent_speed) if batch_recent_speed > 0 else 0
             else:
-                sec_per_proj = max(0, 1 / speed_proj) if speed_proj > 0 else 0
-                speed_str = f"~{format_time_hms(sec_per_proj)}/proj"
+                # Fallback: proportional to projects
+                projects_done = (idx - 1) + project_pct / 100
+                speed_proj = projects_done / elapsed if elapsed > 0 else 0
+                rem_sec = max(0, (total - projects_done) / speed_proj) if speed_proj > 0 else 0
+
+            # Формат скорости: lines/sec if we have line data, else proj/s
+            if total_lines_batch > 0 and len(batch_recent_line_times) >= 3:
+                speed_str = f"{batch_recent_speed:.1f} lines/s"
+            else:
+                projects_done = (idx - 1) + project_pct / 100
+                speed_proj = projects_done / elapsed if elapsed > 0 else 0
+                if speed_proj > 0.01:
+                    speed_str = f"{speed_proj:.2f} proj/s"
+                else:
+                    sec_per_proj = max(0, 1 / speed_proj) if speed_proj > 0 else 0
+                    speed_str = f"~{format_time_hms(sec_per_proj)}/proj"
+
+            rem_str = format_time_hms(rem_sec) if rem_sec > 0 else "Calculating..."
 
             batch_html = get_batch_metrics_html(
-                project,
+                f"project {idx} of {total} — {project}",
                 project_pct,
                 idx,
                 total,
                 batch_pct,
                 format_time_hms(elapsed),
-                format_time_hms(rem_sec),
+                rem_str,
                 speed_str,
             )
             # НАКАПЛИВАЕМ: текущие файлы проекта + все предыдущие
@@ -1380,7 +1504,7 @@ def batch_tts_all_projects(
                 project,
                 dur,
                 size_mb,
-                proc_time if proc_time > 0 else time.time() - proj_start,
+                proc_time if proc_time > 0 else time.monotonic() - proj_start,
             )
         )
         processed_count += 1
@@ -1402,7 +1526,7 @@ def batch_tts_all_projects(
             if "_PARTIAL" not in last_file_name:
                 last_final_mp3_path = str(data_path / project / "mp3" / last_file_name)
 
-    elapsed = time.time() - global_start
+    elapsed = time.monotonic() - global_start
     speed_final = processed_count / elapsed if elapsed > 0 else 0
     sec_per_proj_final = max(0, 1 / speed_final) if speed_final > 0 else 0
 
