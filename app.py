@@ -717,21 +717,84 @@ with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew")
     # Авто-проверка моделей при открытии вкладки «Система и Очистка»
     system_tab.select(fn=quick_check_models_local, outputs=voice_model_status)
 
+def _check_port_lecta(port: int) -> bool:
+    """Return True if *port* is free; otherwise log the owner and decide."""
+    if os.name != "nt":
+        return True
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             f"(Get-NetTCPConnection -LocalPort {port} -ErrorAction SilentlyContinue).OwningProcess"],
+            capture_output=True, text=True, timeout=5,
+            creationflags=0x08000000,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            return True
+        for line in result.stdout.strip().splitlines():
+            pid_str = line.strip()
+            if pid_str and pid_str.isdigit():
+                pid = int(pid_str)
+                try:
+                    info = subprocess.run(
+                        ["powershell", "-NoProfile", "-Command",
+                         f"(Get-Process -Id {pid} -ErrorAction SilentlyContinue | Select-Object ProcessName -ExpandProperty ProcessName)"],
+                        capture_output=True, text=True, timeout=5,
+                        creationflags=0x08000000,
+                    )
+                    image = info.stdout.strip() or "unknown"
+                except Exception:
+                    image = "unknown"
+                logger.info("[PORT] %d busy, owner PID %d (%s)", port, pid, image)
+                # If it's an old LECTA instance, kill it
+                if image.lower() in ("python.exe", "pythonw.exe"):
+                    try:
+                        cmdline_result = subprocess.run(
+                            ["powershell", "-NoProfile", "-Command",
+                             f"(Get-CimInstance Win32_Process -Filter \"ProcessId={pid}\").CommandLine"],
+                            capture_output=True, text=True, timeout=5,
+                            creationflags=0x08000000,
+                        )
+                        cmdline = cmdline_result.stdout.strip()
+                        if "app.py" in cmdline or "fb2tts" in cmdline:
+                            logger.info("[PORT] Killing old LECTA instance (PID %d)", pid)
+                            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                                           capture_output=True, timeout=10,
+                                           creationflags=0x08000000)
+                    except Exception:
+                        pass
+                else:
+                    logger.error("[PORT] %d held by foreign process %s (PID %d). Stop it or use LECTA_PORT env var.",
+                                  port, image, pid)
+                    return False
+    except Exception as e:
+        logger.debug("[PORT] check skipped: %s", e)
+    return True
+
 if __name__ == "__main__":
     sound_dir = CURRENT_DIR / "sound"
     if not data_path.exists(): data_path.mkdir(parents=True, exist_ok=True)
     port = app_config.port if app_config.port else 7860
+
+    if not _check_port_lecta(port):
+        print(f"[PORT] {port} is held by another application. Set LECTA_PORT env var to use a different port.")
+        sys.exit(1)
+
     threading.Timer(1.5, lambda: webbrowser.open(f"http://127.0.0.1:{port}")).start()
-    
-    App.queue().launch(
-        server_name="127.0.0.1",
-        server_port=app_config.port,
-        share=app_config.share,
-        debug=app_config.debug,
-        inbrowser=False, 
-        allowed_paths=[str(sound_dir), str(data_path), str(CURRENT_DIR / "libs")], 
-        favicon_path='libs/at_favicon.ico',
-        css=custom_css,
-        head=custom_head,
-        theme=gr.themes.Base(neutral_hue="slate")
-    )
+
+    try:
+        App.queue().launch(
+            server_name="127.0.0.1",
+            server_port=port,
+            share=app_config.share,
+            debug=app_config.debug,
+            inbrowser=False, 
+            allowed_paths=[str(sound_dir), str(data_path), str(CURRENT_DIR / "libs")], 
+            favicon_path='libs/at_favicon.ico',
+            css=custom_css,
+            head=custom_head,
+            theme=gr.themes.Base(neutral_hue="slate")
+        )
+    except OSError as e:
+        logger.error("[PORT] Could not bind %d: %s", port, e)
+        print(f"[PORT] {port} is not available. Free it, or set LECTA_PORT env var to use a different port.")
+        sys.exit(1)
