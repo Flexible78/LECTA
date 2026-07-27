@@ -93,14 +93,12 @@ def is_relevant_line(line: str) -> bool:
     """Check if a line contains Russian text that is user-facing.
     
     We focus on strings that would appear in the UI:
-      - gr.Info(...)
-      - gr.Warning(...)
-      - gr.Error(...)
+      - gr.Info(...), gr.Warning(...), gr.Error(...)
       - gr.update(label=..., value=..., info=..., placeholder=...)
-      - label=..., info=..., placeholder=..., value=...
-      - gr.Markdown(...)
-      - gr.HTML(...)
-      - Lines with Russian text that are string literals
+      - label=, info=, placeholder=, value= in component constructors
+      - gr.Markdown(...), gr.HTML(...), gr.Button(...)
+      - Returned status strings (function returns with Cyrillic)
+      - Plain string literals containing Cyrillic
     """
     # Skip comments and docstrings
     stripped = line.strip()
@@ -115,20 +113,29 @@ def is_relevant_line(line: str) -> bool:
     ui_indicators = [
         "gr.Info(", "gr.Warning(", "gr.Error(", "gr.Markdown(",
         "gr.HTML(", "gr.update(", "label=",
-        "info=", "placeholder=",
+        "info=", "placeholder=", "value=",
         "gr.Textbox(", "gr.Button(", "gr.Dropdown(",
         "gr.Checkbox(", "gr.Radio(", "gr.Slider(",
         "gr.DataFrame(", "gr.File(", "gr.Audio(",
+        "gr.Accordion(", "gr.Group(",
     ]
     
     for indicator in ui_indicators:
         if indicator in line:
             return True
     
-    # Also flag f-strings with Cyrillic content
-    if 'f"' in line or "f'" in line:
-        if CYRILLIC_RE.search(line):
-            return True
+    # Also flag status/result strings returned by handlers
+    # Pattern: return that contains Cyrillic text
+    if 'return' in line and ('"' in line or "'" in line):
+        return True
+    
+    # Flag f-strings with Cyrillic content (common in status messages)
+    if ('f"' in line or "f'" in line) and CYRILLIC_RE.search(line):
+        return True
+    
+    # Flag yield statements with Cyrillic (generator status messages)
+    if 'yield' in line and CYRILLIC_RE.search(line):
+        return True
     
     return False
 
