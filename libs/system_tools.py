@@ -96,20 +96,158 @@ def clean_tmp_folder():
     return f"✅ Cleaned {deleted_count} items. Freed {mb_freed:.2f} MB."
 
 def get_installed_models():
+    """Returns list of (label_with_size, folder_name) for the Delete model dropdown."""
     models_dir = CURRENT_DIR / "models"
-    if not models_dir.exists(): return []
-    return sorted([item.name for item in models_dir.iterdir()])
+    if not models_dir.exists():
+        return []
+    result = []
+    for item in sorted(models_dir.iterdir()):
+        if item.is_dir():
+            try:
+                size_bytes = sum(f.stat().st_size for f in item.rglob("*") if f.is_file())
+            except Exception:
+                size_bytes = 0
+        else:
+            try:
+                size_bytes = item.stat().st_size
+            except Exception:
+                size_bytes = 0
+        label = f"{item.name} — {_format_size(size_bytes)}"
+        result.append((label, item.name))
+    return result
 
-def delete_selected_model(model_name):
-    if not model_name: return gr.update(), "⚠️ No model selected"
-    target_path = CURRENT_DIR / "models" / model_name
-    if not target_path.exists(): return gr.update(choices=get_installed_models()), "⚠️ Path not found!"
+def get_models_disk_info():
+    """Returns a human-readable summary: total models size and free disk space."""
+    models_dir = CURRENT_DIR / "models"
+    total_bytes = 0
+    count = 0
+    if models_dir.exists():
+        for item in models_dir.iterdir():
+            count += 1
+            if item.is_dir():
+                try:
+                    total_bytes += sum(f.stat().st_size for f in item.rglob("*") if f.is_file())
+                except Exception:
+                    pass
+            else:
+                try:
+                    total_bytes += item.stat().st_size
+                except Exception:
+                    pass
     try:
-        if target_path.is_dir(): shutil.rmtree(target_path)
-        else: target_path.unlink()
-        return gr.update(choices=get_installed_models(), value=""), f"✅ Deleted: {model_name}"
-    except Exception as e: 
-        return gr.update(choices=get_installed_models()), f"❌ Error: {e}"
+        usage = shutil.disk_usage(models_dir if models_dir.exists() else CURRENT_DIR)
+        free_str = _format_size(usage.free)
+    except Exception:
+        free_str = "?"
+    return f"{count} models ({_format_size(total_bytes)} on disk) · Free: {free_str}", count
+
+def delete_selected_model(model_name, confirmed, tts_model_ver=None, acc_model_ver=None):
+    """Delete a model folder. Requires confirmation, protects active models.
+    Returns: (model_del_dropdown_update, model_del_status, disk_info_update, update_section_dropdown_update, update_section_model_del_dropdown_update)
+    """
+    if not model_name:
+        return (
+            gr.update(), "⚠️ No model selected",
+            get_models_disk_info()[0],
+            gr.update(), gr.update()
+        )
+    if not confirmed:
+        return (
+            gr.update(), "⚠️ Confirm deletion with the checkbox first",
+            get_models_disk_info()[0],
+            gr.update(), gr.update()
+        )
+    
+    # Map model folder names to the internal model IDs used by tts_sel / acc_sel
+    folder_to_tts_id = {
+        "vosk-model-tts-ru-0.10-multi": 2,
+        "silero": (3, 4, 7),      # Silero folder contains multiple models (v5_5, cis, en)
+        "v5_5_ru.pt": 3,
+        "v5_cis_base_nostress.pt": 4,
+        "F5TTS_v1_Base_v4_winter": 5,
+        "ESpeech-TTS-1_RL-V2": 6,
+        "v3_en.pt": 7,
+    }
+    folder_to_acc_id = {
+        "silero_stress": 2,
+    }
+    
+    in_use_tts = folder_to_tts_id.get(model_name)
+    in_use_acc = folder_to_acc_id.get(model_name)
+    
+    if in_use_tts is not None and tts_model_ver is not None:
+        try:
+            tts_ver = int(tts_model_ver)
+        except (TypeError, ValueError):
+            tts_ver = None
+        if tts_ver is not None:
+            if isinstance(in_use_tts, tuple):
+                if tts_ver in in_use_tts:
+                    return (
+                        gr.update(), f"⚠️ Model is in use (Silero). Select another TTS model first.",
+                        get_models_disk_info()[0],
+                        gr.update(), gr.update()
+                    )
+            elif tts_ver == in_use_tts:
+                return (
+                    gr.update(), f"⚠️ Model is in use. Select another TTS model first.",
+                    get_models_disk_info()[0],
+                    gr.update(), gr.update()
+                )
+    if in_use_acc is not None and acc_model_ver is not None:
+        try:
+            acc_ver = int(acc_model_ver)
+        except (TypeError, ValueError):
+            acc_ver = None
+        if acc_ver is not None and acc_ver == in_use_acc:
+            return (
+                gr.update(), f"⚠️ Model is in use. Select another stress model first.",
+                get_models_disk_info()[0],
+                gr.update(), gr.update()
+            )
+    
+    target_path = CURRENT_DIR / "models" / model_name
+    if not target_path.exists():
+        return (
+            gr.update(choices=get_installed_models(), value=""),
+            "⚠️ Path not found!",
+            get_models_disk_info()[0],
+            gr.update(choices=get_voice_models_choices()),
+            gr.update(choices=get_installed_models(), value="")
+        )
+    
+    # Calculate size before deletion
+    try:
+        if target_path.is_dir():
+            freed_bytes = sum(f.stat().st_size for f in target_path.rglob("*") if f.is_file())
+        else:
+            freed_bytes = target_path.stat().st_size
+    except Exception:
+        freed_bytes = 0
+    freed_str = _format_size(freed_bytes)
+    
+    try:
+        if target_path.is_dir():
+            shutil.rmtree(target_path)
+        else:
+            target_path.unlink()
+        new_choices = get_installed_models()
+        voice_choices = get_voice_models_choices()
+        disk_info, _ = get_models_disk_info()
+        return (
+            gr.update(choices=new_choices, value=""),
+            f"✅ Deleted: {model_name} — freed {freed_str}",
+            disk_info,
+            gr.update(choices=voice_choices),
+            gr.update(choices=new_choices, value="")
+        )
+    except Exception as e:
+        return (
+            gr.update(choices=get_installed_models()),
+            f"❌ Error: {e}",
+            get_models_disk_info()[0],
+            gr.update(), gr.update()
+        )
 
 # =============================================================================
 # ОБНОВЛЕНИЕ / СКАЧИВАНИЕ ГОЛОСОВЫХ МОДЕЛЕЙ

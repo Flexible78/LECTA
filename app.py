@@ -5,6 +5,7 @@ import re
 import os
 import sys
 import logging
+import inspect
 import numpy as np
 import threading
 import webbrowser
@@ -33,7 +34,8 @@ from libs.project_manager import (
     create_fb2_file, update_existing_fb2, delete_created_file
 )
 from libs.system_tools import (
-    clean_tmp_folder, get_installed_models, delete_selected_model,
+    clean_tmp_folder, get_installed_models, get_models_disk_info,
+    delete_selected_model,
     get_voice_models_choices, update_voice_model, update_all_voice_models,
     check_all_voice_models, stop_model_update, quick_check_models_local
 )
@@ -598,8 +600,11 @@ with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew")
                     tmp_status = gr.Textbox(label="Result", interactive=False, lines=1)
                 with gr.Column(scale=1):
                     model_to_del = gr.Dropdown(choices=get_installed_models(), label="Delete model")
-                    del_model_btn = gr.Button("❌ Delete", variant="stop")
+                    with gr.Row():
+                        confirm_del_cb = gr.Checkbox(label="I understand this deletes files from disk", value=False, scale=2)
+                        del_model_btn = gr.Button("🗑 Delete model", variant="stop", scale=1)
                     model_del_status = gr.Textbox(label="Result", interactive=False, lines=1)
+                    disk_space_display = gr.Textbox(label="Disk space", interactive=False, lines=1, value=get_models_disk_info()[0])
             gr.Markdown("---")
             with gr.Row():
                 with gr.Column(scale=2):
@@ -616,6 +621,11 @@ with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew")
                     with gr.Row():
                         check_models_btn = gr.Button("🔍 Check for updates", variant="secondary")
                         stop_model_btn = gr.Button("🛑 Abort", variant="stop")
+                    with gr.Row():
+                        update_del_model = gr.Dropdown(choices=get_installed_models(), label="Delete model", scale=2)
+                        update_del_confirm_cb = gr.Checkbox(label="I understand this deletes files from disk", value=False, scale=2)
+                        update_del_btn = gr.Button("🗑 Delete", variant="stop", scale=1)
+                    update_del_status = gr.Textbox(label="Result", interactive=False, lines=1)
                 with gr.Column(scale=3):
                     voice_model_status = gr.Textbox(
                         label="Model update status",
@@ -713,13 +723,33 @@ with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew")
     acc_state.change(change_acc_model, inputs=acc_state, outputs=accent_button)
 
     clean_tmp_btn.click(fn=clean_tmp_folder, outputs=tmp_status)
-    del_model_btn.click(fn=delete_selected_model, inputs=model_to_del, outputs=[model_to_del, model_del_status])
+    
+    # Delete model handlers — reuse the same function with confirmation
+    del_model_btn.click(
+        fn=delete_selected_model,
+        inputs=[model_to_del, confirm_del_cb, tts_state, acc_state],
+        outputs=[model_to_del, model_del_status, disk_space_display, voice_model_sel, update_del_model]
+    )
+    
+    # Duplicate delete button inside the Update section (reuses same handler)
+    update_del_btn.click(
+        fn=delete_selected_model,
+        inputs=[update_del_model, update_del_confirm_cb, tts_state, acc_state],
+        outputs=[update_del_model, update_del_status, disk_space_display, voice_model_sel, model_to_del]
+    )
     update_one_model_btn.click(fn=lambda mid: update_voice_model(mid)[0], inputs=voice_model_sel, outputs=voice_model_status)
     update_all_models_btn.click(fn=update_all_voice_models, outputs=voice_model_status)
     check_models_btn.click(fn=check_all_voice_models, outputs=voice_model_status)
     stop_model_btn.click(fn=stop_model_update, outputs=voice_model_status, queue=False)
-    # Авто-проверка моделей при открытии вкладки «Система и Очистка»
-    system_tab.select(fn=quick_check_models_local, outputs=voice_model_status)
+    # Refresh disk info and model lists when opening the System tab
+    def _refresh_system_tab():
+        models = get_installed_models()
+        voices = get_voice_models_choices()
+        return (quick_check_models_local(), get_models_disk_info()[0], models, models, voices)
+    system_tab.select(
+        fn=_refresh_system_tab,
+        outputs=[voice_model_status, disk_space_display, model_to_del, update_del_model, voice_model_sel]
+    )
 
 def _check_port_lecta(port: int) -> bool:
     """Return True if *port* is free; otherwise log the owner and decide."""
@@ -785,26 +815,41 @@ if __name__ == "__main__":
 
     threading.Timer(1.5, lambda: webbrowser.open(f"http://127.0.0.1:{port}")).start()
 
+    launch_kwargs = {
+        "server_name": "127.0.0.1",
+        "server_port": port,
+        "share": app_config.share,
+        "debug": app_config.debug,
+        "inbrowser": False,
+        "show_api": False,
+        "allowed_paths": [str(sound_dir), str(data_path), str(CURRENT_DIR / "libs")],
+        "css": custom_css,
+        "head": custom_head,
+        "theme": gr.themes.Soft(
+            primary_hue="sky",
+            neutral_hue="slate",
+            radius_size=gr.themes.sizes.radius_lg,
+            spacing_size=gr.themes.sizes.spacing_md,
+            font=[gr.themes.GoogleFont("Inter"), "ui-sans-serif", "system-ui", "sans-serif"],
+        ),
+    }
+
+    favicon = CURRENT_DIR / "libs" / "favicon" / "lecta.ico"
+    if favicon.is_file():
+        launch_kwargs["favicon_path"] = str(favicon)
+
+    # Gradio 6 removed/moved several launch() parameters (show_api, favicon_path,
+    # analytics_enabled...). Keep only what the installed version really accepts
+    # instead of guessing from the docs.
+    allowed = set(inspect.signature(App.launch).parameters)
+    dropped = sorted(k for k in launch_kwargs if k not in allowed)
+    if dropped:
+        logger.info("[LAUNCH] Gradio %s ignores: %s", gr.__version__, ", ".join(dropped))
+    launch_kwargs = {k: v for k, v in launch_kwargs.items() if k in allowed}
+
+    logger.info("[LAUNCH] Starting on http://127.0.0.1:%d", port)
     try:
-        App.queue().launch(
-            server_name="127.0.0.1",
-            server_port=port,
-            share=app_config.share,
-            debug=app_config.debug,
-            inbrowser=False,
-            show_api=False,
-            allowed_paths=[str(sound_dir), str(data_path), str(CURRENT_DIR / "libs")],
-            favicon_path=str(favicon) if (favicon := (CURRENT_DIR / "libs" / "favicon" / "lecta.ico")).is_file() else None,
-            css=custom_css,
-            head=custom_head,
-            theme=gr.themes.Soft(
-                primary_hue="sky",
-                neutral_hue="slate",
-                radius_size=gr.themes.sizes.radius_lg,
-                spacing_size=gr.themes.sizes.spacing_md,
-                font=[gr.themes.GoogleFont("Inter"), "ui-sans-serif", "system-ui", "sans-serif"],
-            )
-        )
+        App.queue().launch(**launch_kwargs)
     except OSError as e:
         logger.error("[PORT] Could not bind %d: %s", port, e)
         print(f"[PORT] {port} is not available. Free it, or set LECTA_PORT env var to use a different port.")
