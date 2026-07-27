@@ -1,4 +1,5 @@
 # libs/ui_assets.py — CSS, JavaScript и HTML-генераторы прогресс-баров
+import json
 
 custom_css = """
 .progress-level { background-color: #1a1a1a !important; border-radius: 4px !important; }
@@ -15,18 +16,7 @@ custom_css = """
 /* Hide the Gradio footer — not needed in a local tool */
 footer { display: none !important; }
 
-/* Force English text for the file upload drop zone on non-English browsers.
-   This is a cosmetic hack because Gradio's built-in i18n is driven by the
-   browser's Accept-Language header and cannot be overridden via CSS alone.
-   The drop zone label text is hidden and replaced with an English equivalent. */
-div[data-testid="file-drop-area"] > span {
-  font-size: 0 !important;
-}
-div[data-testid="file-drop-area"] > span::before {
-  content: "Drop file here / - or - / Click to upload";
-  font-size: 14px !important;
-  white-space: normal;
-}
+
 
 /* Block card visual language */
 .block-card {
@@ -50,14 +40,81 @@ textarea[readonly] {
 
 """
 
-custom_head = """
+# Dictionary of known Gradio Russian strings → English.
+# Used by the MutationObserver in custom_head to fix Gradio's built-in
+# i18n when the browser's locale is set to Russian and navigator.language
+# cannot be overridden in time (Gradio 5+ loads its bundle before our
+# <head> script runs).
+GRADIO_RU_EN_MAP = {
+    "Перетащите файл сюда": "Drop file here",
+    "- или -": "- or -",
+    "Нажмите для загрузки": "Click to upload",
+    "Очистить": "Clear",
+    "Отправить": "Submit",
+    "Ошибка": "Error",
+    "Использовать через API": "Use via API",
+    "Создано с помощью Gradio": "Built with Gradio",
+    "Настройки": "Settings",
+}
+
+# Build the JS dictionary literal for injection into the page
+_ru_en_js = "{" + ", ".join(
+    f"{json.dumps(k)}: {json.dumps(v)}" for k, v in GRADIO_RU_EN_MAP.items()
+) + "}"
+
+custom_head = f"""
 <script>
-// Force Gradio to display in English regardless of browser language
-// This must run before the Gradio client script loads
-try {
-  Object.defineProperty(navigator, "language", { get: () => "en-US" });
-  Object.defineProperty(navigator, "languages", { get: () => ["en-US", "en"] });
-} catch (e) {}
+// Clear any stored Gradio i18n preference so the MutationObserver
+// fallback below can take full effect.
+try {{
+  for (var i = localStorage.length - 1; i >= 0; i--) {{
+    var k = localStorage.key(i);
+    if (/lang|locale|i18n/i.test(k)) localStorage.removeItem(k);
+  }}
+}} catch (e) {{}}
+</script>
+<script>
+// Replace known Gradio Russian strings with English equivalents.
+// This runs after the Gradio bundle has already rendered its i18n.
+// It works by walking all text nodes and replacing exact matches
+// from a dictionary, using a single MutationObserver to catch
+// dynamically-added elements.
+(function() {{
+  var MAP = {_ru_en_js};
+
+  function isEditable(el) {{
+    var tag = el.tagName;
+    return tag === 'TEXTAREA' || tag === 'INPUT' || tag === 'SCRIPT' || tag === 'STYLE';
+  }}
+
+  function fixNode(node) {{
+    var raw = node.nodeValue;
+    if (!raw || !raw.trim()) return;
+    var trimmed = raw.trim();
+    if (MAP.hasOwnProperty(trimmed)) {{
+      node.nodeValue = raw.replace(trimmed, MAP[trimmed]);
+    }}
+  }}
+
+  function walkAndFix(root) {{
+    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null, false);
+    var node;
+    while ((node = walker.nextNode())) {{
+      if (!isEditable(node.parentElement)) fixNode(node);
+    }}
+  }}
+
+  // Initial sweep
+  walkAndFix(document.body);
+
+  // Watch for changes
+  var observer = new MutationObserver(function() {{
+    observer.disconnect();
+    walkAndFix(document.body);
+    observer.observe(document.body, {{ subtree: true, characterData: true, childList: true }});
+  }});
+  observer.observe(document.body, {{ subtree: true, characterData: true, childList: true }});
+}})();
 </script>
 <script>
 document.addEventListener('keydown', function(e) {
