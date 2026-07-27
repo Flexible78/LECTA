@@ -22,10 +22,15 @@ Excluded directories (hardcoded):
   - *.egg-info/
 """
 
+import io
 import os
 import re
 import sys
 from pathlib import Path
+
+# Fix stdout encoding on Windows
+if sys.platform == "win32":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
 # Directories and files to exclude
 EXCLUDED_DIRS = {
@@ -148,13 +153,13 @@ def main():
                 found_issues.append((rel_path, i, line.strip()))
     
     if found_issues:
-        print("❌ Found Cyrillic in user-facing strings:\n")
+        print("FAIL: Found Cyrillic in user-facing strings:\n")
         for path, line_no, text in found_issues:
             print(f"  {path}:{line_no}: {text[:120]}")
         print(f"\nTotal: {len(found_issues)} issue(s)")
         sys.exit(1)
     else:
-        print("✅ No user-facing Cyrillic strings found.")
+        print("PASS: No user-facing Cyrillic strings found.")
         sys.exit(0)
 
 
