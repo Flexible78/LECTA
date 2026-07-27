@@ -38,6 +38,7 @@ See [NOTICE.md](NOTICE.md) for full attribution and licensing notes.
 - **Multilingual routing** — automatically detects Russian, English and Hebrew in the same text and sends each segment to the appropriate engine.
 - **Edge cloud voices** — instant generation via Microsoft Edge TTS for all three languages (requires internet; recommended for Hebrew, which has no local backend).
 - **Local backends** — Vosk TTS (56 Russian voices), Silero (Russian + English), F5-TTS (high-quality neural Russian via Misha24-10 and ESpeech models).
+- **LECTA-branded favicon** — an open book with a sound wave, generated programmatically via `tools/make_favicon.py` (Pillow). Multi-layer ICO (16–256 px) plus 512 px PNG.
 - **FB2 and document parsing** — load FB2, PDF, DOCX, EPUB, RTF, HTML, TXT, Markdown, JSON and CSV. Articles can be fetched directly from a URL.
 - **Vocabulary tab** — extract unique words from a text, translate them via Google Translate, and build a pronunciation dictionary.
 - **Batch synthesis** — process all projects in one run with a two-level progress bar, per-project download and a ZIP of all results.

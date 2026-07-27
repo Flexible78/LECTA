@@ -47,7 +47,7 @@ class ACCModel:
                 restored = scale * (weights - zero_point)
                 self.accentizer.homosolver.model.bert.embeddings.word_embeddings.weight.data = restored
             except Exception as e:
-                return None, f"Ошибка загрузки модели: {e}"
+                return None, f"Model loading error: {e}"
 
         return ver, "Model loaded successfully!"
 

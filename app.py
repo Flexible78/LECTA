@@ -476,7 +476,7 @@ with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew")
             
             with gr.Row():
                 with gr.Column(scale=1):
-                    with gr.Group():
+                    with gr.Group(elem_classes="block-card"):
                         with gr.Row(elem_classes=["uniform-row"]):
                             paste_file_btn = gr.Button("📋 From clipboard", variant="primary", elem_classes=["fixed-height-btn"], scale=1)
                             manual_file_input = gr.Textbox(label="File paths (one per line)", lines=2, scale=4, placeholder="C:\\books\\book1.fb2\nC:\\books\\book2.pdf")
@@ -484,7 +484,7 @@ with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew")
                         process_file_btn = gr.Button("⬇️ Upload file(s)", variant="primary")
                 
                 with gr.Column(scale=1):
-                    with gr.Group():
+                    with gr.Group(elem_classes="block-card"):
                         with gr.Row(elem_classes=["uniform-row"]):
                             paste_url_btn = gr.Button("📋 From clipboard", variant="primary", elem_classes=["fixed-height-btn"], scale=1)
                             url_input = gr.Textbox(label="🌐 Or article URL", lines=1, scale=4)

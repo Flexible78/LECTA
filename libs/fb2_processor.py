@@ -182,7 +182,7 @@ class FB2Processor:
                                 translated = re.sub(r'[a-zA-Z\']+', force_en_ru, translated)
                             if translated: elem.text = translated
                     except Exception as e:
-                        elem.text = f"[ОШИБКА ПЕРЕВОДА] " + elem.text
+                        elem.text = f"[TRANSLATION ERROR] " + elem.text
 
                 # Определяем, есть ли в тексте некириллические/нелатинские символы (иврит, арабский, CJK)
                 has_non_european = bool(re.search(r'[\u0590-\u05FF\u0600-\u06FF\u4E00-\u9FFF]', elem.text))

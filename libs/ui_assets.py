@@ -43,8 +43,8 @@ div[data-testid="file-drop-area"] > span::before {
   margin-bottom: 8px !important;
 }
 
-/* Ensure status textboxes have enough height */
-textarea {
+/* Ensure status/readonly textboxes have enough height instead of one-line scrollers */
+textarea[readonly] {
   min-height: 40px !important;
 }
 
