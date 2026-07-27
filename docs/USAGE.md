@@ -259,3 +259,44 @@ translates them.
   imperfect results for idioms or context-dependent meanings.
 - The Gemini API proxy (`start.py`) requires a Gemini CLI OAuth token and is
   not needed for core TTS functionality.
+
+---
+
+## UI rollback
+
+If the redesigned UI (commits starting with `feat(ui):`) does not suit your
+workflow, you can revert to the legacy layout.
+
+### Preview the old UI
+
+```bash
+git switch --detach ui-legacy-2026-07
+```
+
+To return to the current branch:
+
+```bash
+git switch -
+```
+
+### Permanently revert the redesign
+
+Find the commit range of the redesign commits:
+
+```bash
+git log --oneline --grep="feat(ui):"
+```
+
+Then revert:
+
+```bash
+git revert --no-commit <first_commit>..<last_commit>
+git commit -m "revert(ui): back to the legacy layout"
+```
+
+Replace `<first_commit>` and `<last_commit>` with the actual hashes from the
+`git log` output.
+
+> Note: The `ui-legacy-2026-07` tag and `ui-legacy` branch were created before
+> the redesign and point to the last pre-redesign commit. They are not pushed
+> to the remote.

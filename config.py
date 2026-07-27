@@ -6,6 +6,12 @@ import argparse
 
 APP_NAME = "TTS-Server"
 
+# URL of the LECTA GitHub repository.
+# NOTE: The repository is currently private. This link will become
+# active once the repo is published. See BF3 of the public-release task.
+LECTA_REPO_URL = "https://github.com/Flexible78/LECTA"
+
+
 # Configurable TTS worker thread count. Default 8 (matches the previous hardcoded value).
 # Override with the LECTA_TTS_WORKERS environment variable.
 TTS_WORKERS = int(os.getenv("LECTA_TTS_WORKERS", "8"))

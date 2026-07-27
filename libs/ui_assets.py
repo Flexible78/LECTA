@@ -11,9 +11,54 @@ custom_css = """
 @keyframes progress-stripes { from { background-position: 1rem 0; } to { background-position: 0 0; } }
 .progress-text, .eta-text, .progress-info { color: #87CEEB !important; font-weight: bold !important; text-shadow: 1px 1px 2px #000000 !important; opacity: 1 !important; display: inline-block !important; }
 .meta-text, .eta-level { text-align: right !important; display: block !important; width: 100% !important; }
+
+/* Hide the Gradio footer — not needed in a local tool */
+footer { display: none !important; }
+
+/* Force English text for the file upload drop zone on non-English browsers.
+   This is a cosmetic hack because Gradio's built-in i18n is driven by the
+   browser's Accept-Language header and cannot be overridden via CSS alone.
+   The drop zone label text is hidden and replaced with an English equivalent. */
+div[data-testid="file-drop-area"] > span {
+  font-size: 0 !important;
+}
+div[data-testid="file-drop-area"] > span::before {
+  content: "Drop file here / - or - / Click to upload";
+  font-size: 14px !important;
+  white-space: normal;
+}
+
+/* Block card visual language */
+.block-card {
+  background: #1e293b !important;
+  border-radius: 8px !important;
+  padding: 12px !important;
+  border: 1px solid #334155 !important;
+}
+.block-card h3 {
+  color: #38bdf8 !important;
+  font-size: 13px !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.05em !important;
+  margin-bottom: 8px !important;
+}
+
+/* Ensure status textboxes have enough height */
+textarea {
+  min-height: 40px !important;
+}
+
 """
 
 custom_head = """
+<script>
+// Force Gradio to display in English regardless of browser language
+// This must run before the Gradio client script loads
+try {
+  Object.defineProperty(navigator, "language", { get: () => "en-US" });
+  Object.defineProperty(navigator, "languages", { get: () => ["en-US", "en"] });
+} catch (e) {}
+</script>
 <script>
 document.addEventListener('keydown', function(e) {
     if (e.ctrlKey && e.key === 'Enter') {

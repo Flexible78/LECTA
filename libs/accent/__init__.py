@@ -33,7 +33,7 @@ class ACCModel:
             model_path = models_path / "silero_stress" / "accentor.pt"
             model_path.parent.mkdir(parents=True, exist_ok=True)
             if not model_path.is_file():
-                print("Загрузка модели Silero Stress...")
+                print("Loading Silero Stress model...")
                 model_url = "https://github.com/snakers4/silero-stress/raw/refs/heads/master/src/silero_stress/data/accentor.pt"
                 m, status = download_model(model_url, model_path)
                 if m is None:
@@ -49,7 +49,7 @@ class ACCModel:
             except Exception as e:
                 return None, f"Ошибка загрузки модели: {e}"
 
-        return ver, "Модель загружена успешно!"
+        return ver, "Model loaded successfully!"
 
     def process_accent(self, string, regexp):
         if self.ver == 1:
