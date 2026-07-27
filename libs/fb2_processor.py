@@ -215,7 +215,7 @@ class FB2Processor:
                 if idx == 0:
                     cite_elem.addprevious(etree.Element("break", time="2"))
                     p.set("position", "start")
-                if child.tag == "text-author" and child.text: p.text = "Автор " + child.text
+                if child.tag == "text-author" and child.text: p.text = "Author " + child.text
                 else: p.text = child.text or ""
                 cite_elem.addprevious(p)
             cite_elem.getparent().remove(cite_elem)

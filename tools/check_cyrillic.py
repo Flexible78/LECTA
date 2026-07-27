@@ -53,6 +53,7 @@ EXCLUDED_FILES = {
     "g2p.py",
     "check_cyrillic.py",
     "ui_assets.py",  # internal i18n dictionary (GRADIO_RU_EN_MAP), not user-facing
+    "test_apply_patterns.py",  # test file with Cyrillic test data
 }
 
 EXCLUDED_PREFIXES = (
@@ -169,7 +170,25 @@ def main():
         except Exception:
             continue
         
+        in_docstring = False
         for i, line in enumerate(content.splitlines(), 1):
+            stripped = line.strip()
+            # Track multi-line docstring state.
+            # - Pure """ or ''' lines toggle state (open ↔ close).
+            # - """text (opening with content, no closer) sets state to True.
+            # - """text.""" (single-line) does not change state.
+            if stripped.startswith('"""') or stripped.startswith("'''"):
+                if stripped in ('"""', "'''"):
+                    in_docstring = not in_docstring
+                elif not (stripped.endswith('"""') or stripped.endswith("'''")):
+                    in_docstring = True
+                continue
+            if in_docstring:
+                # Handle closing """ at the end of a content line (e.g. "text.""")
+                if stripped.endswith('"""') or stripped.endswith("'''"):
+                    in_docstring = False
+                continue
+            
             if is_relevant_line(line):
                 found_issues.append((rel_path, i, line.strip()))
     
