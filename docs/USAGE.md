@@ -104,7 +104,27 @@ Removes temporary files from `tmp/`.
 
 ### Delete model
 
-Remove a model folder from `models/`.
+Remove a model folder from `models/`. Each model shows its on-disk size next to
+its name (e.g. `F5TTS_v1_Base_v4_winter — 1.26 GB`).
+
+**Where to find it:**
+- Top of the **🛠️ System & Cleanup** tab — next to the tmp folder cleaner.
+- Also duplicated inside the **Update / download voice models** section so you
+  can delete a model right where you download it.
+
+**Before deleting:**
+- Check the **Disk space** field at the top of the tab — it shows total model
+  size and free disk space. It refreshes after every deletion.
+- Tick the **I understand this deletes files from disk** checkbox. Without it,
+  the delete button returns a warning and does nothing. No popup dialogs.
+
+**Protection:** you cannot delete a model that is currently loaded in the
+sidebar (TTS model or stress model). The app will ask you to switch to
+another model first.
+
+**After deletion:** the dropdowns update, the disk space line recalculates, and
+the status confirms `✅ Deleted: <name> — freed X.XX GB`. The model can be
+downloaded again from the update section below.
 
 ### Update / download voice models
 
@@ -166,6 +186,48 @@ Customise the `data/` and `models/` directories. Changes are saved to
 ### 🔔 Completion sound
 
 Choose a `.wav` file to play when TTS finishes.
+
+### Find & remove repeated fragments
+
+> Located in the **🔍 ANALYZE** tab, right below the Manual save / Auto-Clean
+> buttons. Open the **🧹 Find & remove repeated fragments** accordion.
+
+This tool removes or replaces repeated garbage fragments from the parsed XML
+before you synthesise it. It works like a multi-replace panel without saving
+anything to disk until you press **📝 Manual save (Ctrl+S)**.
+
+**Step-by-step workflow:**
+
+1. Select a fragment in the **File content** textarea with your mouse.
+2. Click **📋 Copy selection** — the fragment is copied to the clipboard
+   *and* added as a new line in the **Patterns** box.
+3. Repeat for other fragments. You can also type or paste patterns manually.
+4. Click **🔎 Count** to see how many times each fragment appears (no changes made).
+5. Click **🧹 Remove all** to delete or replace all occurrences at once.
+6. If you don't like the result, press **↩ Undo** (up to 10 steps).
+7. When satisfied, press the existing **📝 Manual save (Ctrl+S)** to write
+   the cleaned text back to disk.
+
+**Pattern syntax (one per line):**
+
+| Pattern | Meaning |
+|---------|---------|
+| `<p>отвэзетэ,</p>` | Delete every occurrence of this exact fragment |
+| `hello => hi` | Replace `hello` with `hi` everywhere |
+
+**Options:**
+
+- **Whole line** — when checked, removes entire lines that contain the pattern
+  (including the line break), instead of just the pattern itself.
+- **Regex** — when checked, patterns are treated as regular expressions.
+  If a pattern is not a valid regex, the app reports `❌ Bad regex` and
+  skips it without changing the text.
+
+**Undo:** stores up to 10 full copies of the text. Clicking **↩ Undo** restores
+the previous version. The stack is lost when you switch files or reload.
+
+**Important:** nothing is written to disk until you click **📝 Manual save**.
+The cleanup report always shows `Not saved yet` as a reminder.
 
 ---
 
@@ -252,6 +314,12 @@ translates them.
 
 ## Known limitations
 
+- **Interface language** is English only. The app does not bundle translations.
+  If you prefer a different language, you can enable the browser's built-in
+  page translation (right-click → "Translate to …") — the app does not block it.
+  Note: with browser auto-translation enabled, Gradio's button labels may be
+  mangled and extra quotation marks may appear. This is a side effect of the
+  browser translator, not a bug in the application.
 - **Hebrew** has no local TTS backend — only Edge cloud voices are available.
 - **F5-TTS** is GPU-intensive. On CPU, generation is significantly slower.
 - **Stress placement** (RuAccent / Silero Stress) applies to Russian text only.
@@ -259,6 +327,8 @@ translates them.
   imperfect results for idioms or context-dependent meanings.
 - The Gemini API proxy (`start.py`) requires a Gemini CLI OAuth token and is
   not needed for core TTS functionality.
+- **Undo** in the Find & remove fragments panel is limited to 10 steps and
+  resets when you switch to a different file or reload the page.
 
 ---
 

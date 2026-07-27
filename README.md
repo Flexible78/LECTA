@@ -43,6 +43,8 @@ See [NOTICE.md](NOTICE.md) for full attribution and licensing notes.
 - **Vocabulary tab** — extract unique words from a text, translate them via Google Translate, and build a pronunciation dictionary.
 - **Batch synthesis** — process all projects in one run with a two-level progress bar, per-project download and a ZIP of all results.
 - **Stress placement** — RuAccent or Silero Stress for correct Russian word stress.
+- **Model management** — delete voice models with on-disk size display and free-space reporting. Active models are protected from accidental deletion.
+- **Find & remove fragments** — multi-replace panel with clipboard integration, regex support, whole-line mode, and undo stack (up to 10 steps).
 - **Custom sounds** — insert event sounds, pauses and background music at specific text markers.
 
 ---
