@@ -2,6 +2,12 @@
 import json
 
 custom_css = """
+/* Force custom HTML progress bar fill widths via CSS custom properties.
+   Gradio 6 may override inline width on divs inside gr.HTML, so we
+   use !important with a variable set via inline style. */
+.lecta-pb-fill { width: var(--pb-pct, 0%) !important; }
+
+/* Style Gradio's built-in progress bar (used during model loading) */
 .progress-level { background-color: #1a1a1a !important; border-radius: 4px !important; }
 .progress-level > div[style*="width"], .progress-bar {
     background-color: #FF8C00 !important; 
@@ -178,26 +184,26 @@ def format_audio_time(seconds):
 # ═══ HTML PROGRESS BAR GENERATORS ═══
 
 def get_upload_progress_html(pct, current, total, label):
-    """Прогресс-бар для авто-парсинга в зоне загрузки файлов (app.py)"""
+    """Upload progress bar (app.py)"""
     return f"""<div style="background:#1e293b;padding:12px;border-radius:8px;border:1px solid #334155;margin-top:8px;">
         <div style="display:flex;justify-content:space-between;margin-bottom:4px;color:#f8fafc;font-size:14px;">
             <span>🔄 Auto-parsing: {label}</span><span style="color:#f97316;">{pct}%</span>
         </div>
         <div style="width:100%;background:#0f172a;border-radius:8px;overflow:hidden;height:16px;box-shadow:inset 0 2px 4px rgba(0,0,0,0.5);">
-            <div style="width:{pct}%;height:100%;background:linear-gradient(90deg,#ea580c,#f97316);transition:width 0.3s ease;"></div>
+            <div class="lecta-pb-fill" style="--pb-pct:{pct}%;height:100%;background:linear-gradient(90deg,#ea580c,#f97316);transition:width 0.3s ease;"></div>
         </div>
         <div style="color:#94a3b8;font-size:12px;margin-top:4px;">Project {current} of {total}</div>
     </div>"""
 
 def get_metrics_html(percent, elapsed, remaining, speed):
-    """Прогресс-бар для одиночной озвучки (tts_tab.py)"""
+    """Single TTS progress bar (tts_tab.py)"""
     return f"""
     <div style="background: #1e293b; padding: 15px; border-radius: 8px; border: 1px solid #334155; margin-bottom: 10px;">
         <div style="display: flex; justify-content: space-between; margin-bottom: 5px; font-weight: bold; font-size: 18px; color: #f8fafc;">
             <span>TTS progress</span><span style="color: #f97316;">{percent}%</span>
         </div>
         <div style="width: 100%; background-color: #0f172a; border-radius: 10px; overflow: hidden; height: 28px; box-shadow: inset 0 2px 4px rgba(0,0,0,0.5);">
-            <div style="width: {percent}%; height: 100%; background: linear-gradient(90deg, #ea580c, #f97316); transition: width 0.3s ease;"></div>
+            <div class="lecta-pb-fill" style="--pb-pct:{percent}%;height:100%;background:linear-gradient(90deg,#ea580c,#f97316);transition:width 0.3s ease;"></div>
         </div>
         <div style="display: flex; justify-content: space-between; margin-top: 10px; color: #94a3b8; font-family: monospace; font-size: 15px;">
             <span>⏱ Elapsed: <span style="color:#38bdf8">{elapsed}</span></span>
@@ -209,7 +215,7 @@ def get_metrics_html(percent, elapsed, remaining, speed):
 
 def get_batch_metrics_html(project_name, project_pct, project_idx, total_projects, 
                            batch_pct, elapsed, remaining, speed):
-    """Двухуровневый прогресс-бар для пакетной озвучки (tts_tab.py)"""
+    """Two-level batch TTS progress bar (tts_tab.py)"""
     return f"""
     <div style="background: #1e293b; padding: 15px; border-radius: 8px; border: 1px solid #334155; margin-bottom: 10px;">
         <div style="display: flex; justify-content: space-between; margin-bottom: 3px; font-weight: bold; font-size: 14px; color: #94a3b8;">
@@ -217,7 +223,7 @@ def get_batch_metrics_html(project_name, project_pct, project_idx, total_project
             <span style="color: #c084fc;">{batch_pct}%</span>
         </div>
         <div style="width: 100%; background-color: #0f172a; border-radius: 8px; overflow: hidden; height: 12px; box-shadow: inset 0 2px 4px rgba(0,0,0,0.5); margin-bottom: 14px;">
-            <div style="width: {batch_pct}%; height: 100%; background: linear-gradient(90deg, #7c3aed, #a78bfa); transition: width 0.3s ease;"></div>
+            <div class="lecta-pb-fill" style="--pb-pct:{batch_pct}%;height:100%;background:linear-gradient(90deg,#7c3aed,#a78bfa);transition:width 0.3s ease;"></div>
         </div>
         
         <div style="display: flex; justify-content: space-between; margin-bottom: 3px; font-weight: bold; font-size: 14px; color: #f8fafc;">
@@ -225,7 +231,7 @@ def get_batch_metrics_html(project_name, project_pct, project_idx, total_project
             <span style="color: #f97316;">{project_pct}%</span>
         </div>
         <div style="width: 100%; background-color: #0f172a; border-radius: 8px; overflow: hidden; height: 18px; box-shadow: inset 0 2px 4px rgba(0,0,0,0.5); margin-bottom: 10px;">
-            <div style="width: {project_pct}%; height: 100%; background: linear-gradient(90deg, #ea580c, #f97316); transition: width 0.3s ease;"></div>
+            <div class="lecta-pb-fill" style="--pb-pct:{project_pct}%;height:100%;background:linear-gradient(90deg,#ea580c,#f97316);transition:width 0.3s ease;"></div>
         </div>
         
         <div style="display: flex; justify-content: space-between; margin-top: 8px; color: #94a3b8; font-family: monospace; font-size: 13px;">
@@ -285,27 +291,27 @@ def get_batch_summary_html(stats):
     """
 
 def get_parse_metrics_html(percent, action="Waiting..."):
-    """Прогресс-бар для парсинга FB2 (parse_tab.py)"""
+    """Parse progress bar (parse_tab.py)"""
     return f"""
     <div style="background: #1e293b; padding: 15px; border-radius: 8px; border: 1px solid #334155; margin-bottom: 10px;">
         <div style="display: flex; justify-content: space-between; margin-bottom: 5px; font-weight: bold; font-size: 16px; color: #f8fafc;">
             <span>Status: {action}</span><span style="color: #f97316;">{percent}%</span>
         </div>
         <div style="width: 100%; background-color: #0f172a; border-radius: 10px; overflow: hidden; height: 20px; box-shadow: inset 0 2px 4px rgba(0,0,0,0.5);">
-            <div style="width: {percent}%; height: 100%; background: linear-gradient(90deg, #ea580c, #f97316); transition: width 0.3s ease;"></div>
+            <div class="lecta-pb-fill" style="--pb-pct:{percent}%;height:100%;background:linear-gradient(90deg,#ea580c,#f97316);transition:width 0.3s ease;"></div>
         </div>
     </div>
     """
 
 def get_vocab_metrics_html(percent, elapsed, remaining, speed, action="Waiting..."):
-    """Прогресс-бар для парсера словаря (vocab_tab.py)"""
+    """Vocabulary parser progress bar (vocab_tab.py)"""
     return f"""
     <div style="background: #1e293b; padding: 15px; border-radius: 8px; border: 1px solid #334155; margin-bottom: 10px;">
         <div style="display: flex; justify-content: space-between; margin-bottom: 5px; font-weight: bold; font-size: 16px; color: #f8fafc;">
             <span>Status: {action}</span><span style="color: #f97316;">{percent}%</span>
         </div>
         <div style="width: 100%; background-color: #0f172a; border-radius: 10px; overflow: hidden; height: 20px; box-shadow: inset 0 2px 4px rgba(0,0,0,0.5);">
-            <div style="width: {percent}%; height: 100%; background: linear-gradient(90deg, #ea580c, #f97316); transition: width 0.3s ease;"></div>
+            <div class="lecta-pb-fill" style="--pb-pct:{percent}%;height:100%;background:linear-gradient(90deg,#ea580c,#f97316);transition:width 0.3s ease;"></div>
         </div>
         <div style="display: flex; justify-content: space-between; margin-top: 10px; color: #94a3b8; font-family: monospace; font-size: 14px;">
             <span>⏱ Elapsed: <span style="color:#38bdf8">{elapsed}</span></span>
