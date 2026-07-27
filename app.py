@@ -17,6 +17,7 @@ from libs.accent import accentizer
 from libs.tts import synth, set_tts_device
 from libs.tts_preprocessor import TextParse
 from config import AppConfig
+import config as config_module
 from gr_tabs.parse_tab import parse_tab, get_all_projects_xml
 from gr_tabs.tts_tab import tts_tab
 from gr_tabs.settings_tab import settings_tab
@@ -165,7 +166,7 @@ def process_url_wrapper(url, remove_ru):
     return refresh_data(ab_name), refresh_data(ab_name)
 
 def _extract_file_path(file_obj):
-    """Извлекает путь из объекта файла Gradio (строка или объект с .name)"""
+    """Extract path from a Gradio file object (string or object with .name)"""
     if isinstance(file_obj, str):
         return file_obj
     if hasattr(file_obj, 'name'):
@@ -266,7 +267,7 @@ def process_file_wrapper(manual_path, drop_files, remove_ru):
     )
 
 def clean_srt_timings(text):
-    """Очищает текст от таймкодов SRT файлов (для подготовки словарей)"""
+    """Clean SRT timecodes from text (for dictionary preparation)"""
     if not text: return text
     # Удаляем таймкоды 00:00:19,560 --> 00:00:21,570
     text = re.sub(r'\d{2}:\d{2}:\d{2}[,\.]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[,\.]\d{3}', '', text)
@@ -408,11 +409,14 @@ with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew")
         "Text-to-Speech for Russian, English and Hebrew"
         "</p>"
         "<p style='margin:2px 0; color:#64748b; font-size:12px;'>"
-        "<a href='https://github.com/Flexible78/KATAV' style='color:#64748b;'>KATAV writes, LECTA reads.</a>"
+        "KATAV writes, LECTA reads."
+        "</p>"
+        "<p style='margin:2px 0; color:#64748b; font-size:12px;'>"
+        "<a href='https://github.com/Flexible78/KATAV' target='_blank' rel='noopener' style='color:#38bdf8;'>KATAV on GitHub</a>"
         "&nbsp;&nbsp;|&nbsp;&nbsp;"
-        "Built on <a href='https://gitverse.ru/diger/fb2tts' style='color:#64748b;'>fb2tts</a> by diger"
+        "<a href='" + config_module.LECTA_REPO_URL + "' target='_blank' rel='noopener' style='color:#38bdf8;'>LECTA on GitHub</a>"
         "&nbsp;&nbsp;|&nbsp;&nbsp;"
-        "<a href='https://github.com/Flexible78/LECTA' style='color:#64748b;'>GitHub</a>"
+        "Built on <a href='https://gitverse.ru/diger/fb2tts' target='_blank' rel='noopener' style='color:#64748b;'>fb2tts</a> by diger"
         "</p>"
         "</div>"
     )
@@ -787,12 +791,19 @@ if __name__ == "__main__":
             server_port=port,
             share=app_config.share,
             debug=app_config.debug,
-            inbrowser=False, 
-            allowed_paths=[str(sound_dir), str(data_path), str(CURRENT_DIR / "libs")], 
-            favicon_path='libs/at_favicon.ico',
+            inbrowser=False,
+            show_api=False,
+            allowed_paths=[str(sound_dir), str(data_path), str(CURRENT_DIR / "libs")],
+            favicon_path=str(favicon) if (favicon := (CURRENT_DIR / "libs" / "favicon" / "lecta.ico")).is_file() else None,
             css=custom_css,
             head=custom_head,
-            theme=gr.themes.Base(neutral_hue="slate")
+            theme=gr.themes.Soft(
+                primary_hue="sky",
+                neutral_hue="slate",
+                radius_size=gr.themes.sizes.radius_lg,
+                spacing_size=gr.themes.sizes.spacing_md,
+                font=[gr.themes.GoogleFont("Inter"), "ui-sans-serif", "system-ui", "sans-serif"],
+            )
         )
     except OSError as e:
         logger.error("[PORT] Could not bind %d: %s", port, e)
