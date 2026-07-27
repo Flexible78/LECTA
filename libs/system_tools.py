@@ -26,14 +26,14 @@ CURRENT_DIR = Path(__file__).resolve().parent.parent
 # Каждый пункт: (id, название, список файлов для скачивания)
 # Файл: (url, локальный_путь_относительно_models/)
 VOICE_MODELS_REGISTRY = [
-    ("vosk_010", "Vosk 0.10 (56 голосов)", [
+    ("vosk_010", "Vosk 0.10 (56 voices)", [
         ("https://myfreenet.ru/models/vosk-model-tts-ru-0.10-multi.zip",
          "vosk-model-tts-ru-0.10-multi.zip"),
     ]),
     ("silero_ru", "Silero v5_5 (Russian, 5 voices)", [
         ("https://models.silero.ai/models/tts/ru/v5_5_ru.pt", "silero/v5_5_ru.pt"),
     ]),
-    ("silero_cis", "Silero v5_cis (60 голосов)", [
+    ("silero_cis", "Silero v5_cis (60 voices)", [
         ("https://models.silero.ai/models/tts/ru/v5_cis_base_nostress.pt",
          "silero/v5_cis_base_nostress.pt"),
     ]),

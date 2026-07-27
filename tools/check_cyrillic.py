@@ -52,6 +52,7 @@ EXCLUDED_FILES = {
     "f5_tts_backend.py",
     "g2p.py",
     "check_cyrillic.py",
+    "ui_assets.py",  # internal i18n dictionary (GRADIO_RU_EN_MAP), not user-facing
 }
 
 EXCLUDED_PREFIXES = (
@@ -136,6 +137,19 @@ def is_relevant_line(line: str) -> bool:
     # Flag yield statements with Cyrillic (generator status messages)
     if 'yield' in line and CYRILLIC_RE.search(line):
         return True
+    
+    # Catch Cyrillic inside non-raw string literals in data structures
+    # (e.g. model names in tuples/lists that feed into UI dropdowns).
+    # First strip inline comments so we don't flag Cyrillic in # comments.
+    # Then look for Cyrillic in regular (non-raw) string quotes.
+    code_only = line.split('#')[0]
+    if CYRILLIC_RE.search(code_only):
+        # Non-raw double-quoted strings: "..." containing Cyrillic (not r"... or R"...)
+        if re.search(r'(?<![rR])(?<![\w])"[^"]*[а-яА-ЯёЁ][^"]*"', code_only):
+            return True
+        # Non-raw single-quoted strings: '...' containing Cyrillic (not r'... or R'...)
+        if re.search(r"(?<![rR])(?<![\w])'[^']*[а-яА-ЯёЁ][^']*'", code_only):
+            return True
     
     return False
 

@@ -1,8 +1,10 @@
+import os
+os.environ["GRADIO_LANGUAGE"] = "en"
+
 import gradio as gr
 from pathlib import Path
 import shutil
 import re
-import os
 import sys
 import logging
 import inspect
