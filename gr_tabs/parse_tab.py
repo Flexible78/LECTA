@@ -190,6 +190,155 @@ def stop_parse():
         processor.stop_parse()
     return get_parse_metrics_html(100, "Interrupting..."), "🛑 Stopping..."
 
+
+# ═══════════════════════════════════════════════════════════════════
+# BF11 — Multi-replace pattern engine for the ANALYZE editor
+# ═══════════════════════════════════════════════════════════════════
+
+def apply_patterns(content: str, patterns_text: str, whole_line: bool, use_regex: bool):
+    """Apply find-and-remove/replace patterns to text.
+    
+    Patterns are one per line. Syntax:
+      - "find"          → delete all occurrences
+      - "find => replace" → replace all occurrences
+    
+    Args:
+        content: The text to process.
+        patterns_text: Newline-separated list of patterns.
+        whole_line: If True, remove entire lines containing the pattern.
+        use_regex: If True, treat patterns as regex; otherwise plain text.
+    
+    Returns:
+        (cleaned_content, report_string)
+    """
+    if not content:
+        return content, "⚠️ No content to process"
+    if not patterns_text or not patterns_text.strip():
+        return content, "⚠️ No patterns provided"
+    
+    lines = [l for l in patterns_text.strip().split('\n') if l.strip()]
+    report_lines = []
+    total_fragments = 0
+    total_chars = 0
+    pattern_count = 0
+    
+    for line in lines:
+        line = line.strip()
+        
+        # Parse: "find => replace" or just "find" (delete)
+        if '=>' in line:
+            parts = line.split('=>', 1)
+            find_str = parts[0].strip()
+            replace_str = parts[1].strip()
+        else:
+            find_str = line
+            replace_str = ''
+        
+        if not find_str:
+            continue
+        
+        pattern_count += 1
+        
+        try:
+            if use_regex:
+                if whole_line:
+                    pattern = re.compile(r'^.*' + find_str + r'.*\n?', re.MULTILINE)
+                else:
+                    pattern = re.compile(find_str)
+                count = len(pattern.findall(content))
+                new_content = pattern.sub(replace_str, content)
+            else:
+                if whole_line:
+                    escaped = re.escape(find_str)
+                    pattern = re.compile(r'^.*' + escaped + r'.*\n?', re.MULTILINE)
+                    count = len(pattern.findall(content))
+                    new_content = pattern.sub(replace_str + ('\n' if replace_str else ''), content)
+                else:
+                    count = content.count(find_str)
+                    new_content = content.replace(find_str, replace_str)
+            
+            chars_removed = len(content) - len(new_content)
+            content = new_content
+            
+            display = find_str if len(find_str) <= 60 else find_str[:57] + '...'
+            if replace_str:
+                r_display = replace_str if len(replace_str) <= 30 else replace_str[:27] + '...'
+                report_lines.append(f'"{display}" => "{r_display}" — {count} replaced')
+            else:
+                report_lines.append(f'"{display}" — {count} removed')
+            
+            total_fragments += count
+            total_chars += chars_removed
+        except re.error as e:
+            report_lines.append(f'❌ Bad regex: "{find_str[:60]}" — {e}')
+    
+    if report_lines:
+        report_lines.append('')
+    report_lines.append(f'Total: {pattern_count} patterns, {total_fragments} fragments, {total_chars:,} characters removed')
+    report_lines.append('Not saved yet — press Manual save (Ctrl+S)')
+    
+    return content, '\n'.join(report_lines)
+
+
+def _add_pattern(patterns_text: str, selection: str):
+    """Append a selected fragment to the patterns list."""
+    if not selection or not selection.strip():
+        return patterns_text, "⚠️ Nothing selected"
+    sel = selection.strip()
+    if patterns_text and patterns_text.strip():
+        new_text = patterns_text.strip() + '\n' + sel
+    else:
+        new_text = sel
+    return new_text, f"📋 Added pattern: \"{sel[:60]}{'...' if len(sel) > 60 else ''}\""
+
+
+def _count_patterns(content: str, patterns_text: str, whole_line: bool, use_regex: bool):
+    """Count matches only, without modifying content."""
+    if not content:
+        return content, "⚠️ No content to process"
+    if not patterns_text or not patterns_text.strip():
+        return content, "⚠️ No patterns provided"
+    
+    lines = [l for l in patterns_text.strip().split('\n') if l.strip()]
+    report_lines = []
+    total_fragments = 0
+    
+    for line in lines:
+        line = line.strip()
+        if '=>' in line:
+            find_str = line.split('=>', 1)[0].strip()
+        else:
+            find_str = line
+        if not find_str:
+            continue
+        
+        try:
+            if use_regex:
+                if whole_line:
+                    pattern = re.compile(r'^.*' + find_str + r'.*$', re.MULTILINE)
+                else:
+                    pattern = re.compile(find_str)
+                count = len(pattern.findall(content))
+            else:
+                if whole_line:
+                    escaped = re.escape(find_str)
+                    pattern = re.compile(r'^.*' + escaped + r'.*$', re.MULTILINE)
+                    count = len(pattern.findall(content))
+                else:
+                    count = content.count(find_str)
+            
+            display = find_str if len(find_str) <= 60 else find_str[:57] + '...'
+            report_lines.append(f'"{display}" — {count} matches')
+            total_fragments += count
+        except re.error as e:
+            report_lines.append(f'❌ Bad regex: "{find_str[:60]}" — {e}')
+    
+    if report_lines:
+        report_lines.append('')
+    report_lines.append(f'Total: {total_fragments} matches across {len(lines)} patterns (no changes made)')
+    
+    return content, '\n'.join(report_lines)
+
 def parse_tab(ab_path, acc_state, tts_state):
     with gr.Tab("🔍 ANALYZE") as pr_tab:
         gr.Markdown("After changing the TTS model, you **must** re-process the fb2.")
@@ -233,11 +382,32 @@ def parse_tab(ab_path, acc_state, tts_state):
                 del_btn = gr.Button("❌ Delete file (Delete)", interactive=False, elem_id="del_file_btn")
             
             with gr.Column(scale=5, min_width=500):
-                file_content = gr.Textbox(label="File content (with word wrap)", interactive=True, lines=25, max_lines=40)
+                file_content = gr.Textbox(label="File content (with word wrap)", interactive=True, lines=25, max_lines=40, elem_id="file_content")
                 
                 with gr.Row():
                     save_btn = gr.Button("📝 Manual save (Ctrl+S)", elem_id="save_xml_btn")
                     magic_clean_btn = gr.Button("✨ Manual Auto-Clean", variant="secondary")
+                
+                # ── BF11: Find & remove repeated fragments ──
+                undo_stack = gr.State([])
+                with gr.Accordion("🧹 Find & remove repeated fragments", open=False):
+                    with gr.Row():
+                        copy_selection_btn = gr.Button("📋 Copy selection", variant="secondary", scale=1)
+                    patterns_input = gr.Textbox(
+                        label="Patterns — one per line",
+                        lines=6,
+                        placeholder="<p>garbage</p>\nbad word => good word\nPEREVOD.",
+                        info="Syntax: find => replace. Without => the pattern is deleted.",
+                        elem_id="patterns_input"
+                    )
+                    with gr.Row():
+                        whole_line_cb = gr.Checkbox(label="Whole line", value=False)
+                        regex_cb = gr.Checkbox(label="Regex", value=False)
+                    with gr.Row():
+                        count_btn = gr.Button("🔎 Count", scale=1)
+                        remove_all_btn = gr.Button("🧹 Remove all", variant="stop", scale=1)
+                        undo_btn = gr.Button("↩ Undo", scale=1)
+                    cleanup_report = gr.Textbox(label="Cleanup report", lines=4, interactive=False)
                 
                 cur_file = gr.State()
 
@@ -260,6 +430,63 @@ def parse_tab(ab_path, acc_state, tts_state):
     save_btn.click(fn=lambda f_c, c_f: FB2Processor.save_xml(f_c, c_f), inputs=[file_content, cur_file], outputs=status)
     magic_clean_btn.click(fn=magic_clean_xml, inputs=[file_content, ab_path, cur_file], outputs=[file_content, status])
     del_btn.click(fn=del_file, inputs=[cur_file, ab_path], outputs=[df_output, file_content])
+
+    # ── BF11: Find & remove repeated fragments handlers ──
+    _copy_sel_js = """
+    function() {
+        var ta = document.querySelector('#file_content textarea');
+        if (!ta) return;
+        var sel = ta.value.substring(ta.selectionStart, ta.selectionEnd);
+        if (!sel) return;
+        // Copy to clipboard (multiple fallback strategies)
+        try { navigator.clipboard.writeText(sel); } catch(e) { try { document.execCommand('copy'); } catch(e2) {} }
+        // Append selection to the patterns textarea via DOM
+        var pta = document.querySelector('#patterns_input textarea');
+        if (pta) {
+            pta.value = (pta.value ? pta.value + '\\n' : '') + sel;
+            pta.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+    }
+    """
+    copy_selection_btn.click(
+        fn=None,
+        inputs=[],
+        outputs=[],
+        js=_copy_sel_js
+    )
+    count_btn.click(
+        fn=_count_patterns,
+        inputs=[file_content, patterns_input, whole_line_cb, regex_cb],
+        outputs=[file_content, cleanup_report]
+    )
+    
+    def _remove_wrapper(content, patterns, whole_line, use_regex, undo_list):
+        """Apply removals and push current content to undo stack."""
+        undo_list = (undo_list or []).copy()
+        undo_list.append(content)
+        if len(undo_list) > 10:
+            undo_list = undo_list[-10:]
+        new_content, report = apply_patterns(content, patterns, whole_line, use_regex)
+        return new_content, report, undo_list
+    
+    remove_all_btn.click(
+        fn=_remove_wrapper,
+        inputs=[file_content, patterns_input, whole_line_cb, regex_cb, undo_stack],
+        outputs=[file_content, cleanup_report, undo_stack]
+    )
+    
+    def _undo_wrapper(undo_list):
+        if not undo_list:
+            return gr.update(), "⚠️ Nothing to undo", undo_list
+        prev = undo_list[-1]
+        new_list = undo_list[:-1]
+        return prev, f"↩ Undone — restored {len(prev):,} characters", new_list
+    
+    undo_btn.click(
+        fn=_undo_wrapper,
+        inputs=[undo_stack],
+        outputs=[file_content, cleanup_report, undo_stack]
+    )
 
     pr_tab.select(fn=get_all_projects_xml, outputs=df_output)
     acc_state.change(fn=lambda: gr.update(interactive=True, value=False), outputs=accent)
