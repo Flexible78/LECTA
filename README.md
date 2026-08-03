@@ -1,3 +1,34 @@
+# LECTA - Russian audiobook studio (FB2 to speech)
+
+> **Attribution.** This project builds on the open-source [fb2tts](https://gitverse.ru/diger/fb2tts)
+> project by *diger*, which provides the original Gradio interface and the FB2 parsing and TTS
+> pipeline. Everything listed under "What this repository adds" below was written by me on top of
+> that base. Please respect the upstream author when reusing this code.
+
+## What this repository adds
+
+- **Batch synthesis** routed through a parallel edge-TTS path with a shared cache, so a whole book
+  is voiced in one run instead of chapter by chapter.
+- **A file index** that resolves paths across projects, which is what makes cross-project batch
+  runs possible at all.
+- **Interrupted runs survive**: a partial file keeps the model it used and the time it spent, and a
+  missing XML is parsed automatically instead of failing the run.
+- **Honest result packaging**: the ZIP is built by scanning the output directory after completion,
+  so every produced MP3 ends up inside it.
+- **UI work**: per-row download, multiselect with bulk delete, checkbox state that survives a
+  refresh, and a completion sound that does not block the player from loading the final MP3.
+- **Robustness fixes**: the audio player is guarded against empty and directory paths that raised
+  PermissionError, and `is_file()` is checked before a download is offered.
+
+## Stack
+
+Python 3.11, Gradio 6, PyTorch 2.6 with torchaudio, Vosk TTS / Silero / F5-TTS backends,
+ONNX Runtime, RUAccent for stress placement, lxml and pymorphy3 for text processing,
+FastAPI and uvicorn for the local provider proxy, SQLite for project state.
+The UI binds to 127.0.0.1 by default and no public tunnel is opened unless `--share` is passed.
+
+---
+
 - [ ] fb2tts
 Для преобразования текста в речь использутся [Vosk TTS](https://github.com/alphacep/vosk-tts), [Silero](https://github.com/snakers4/silero-models) и [F5-TTS](https://github.com/SWivid/F5-TTS). Для F5-TTS используются модели от [Misha24-10](https://huggingface.co/Misha24-10/F5-TTS_RUSSIAN/tree/main/F5TTS_v1_Base_v4_winter) и [ESpeech](https://huggingface.co/ESpeech/ESpeech-TTS-1_RL-V2/tree/main)
 Для расстановки ударений можно использовать [Ruaccent](https://gitverse.ru/Den4ikAI/ruaccent) или [Silero Stress](https://github.com/snakers4/silero-stress)
