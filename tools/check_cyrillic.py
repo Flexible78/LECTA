@@ -54,6 +54,7 @@ EXCLUDED_FILES = {
     "check_cyrillic.py",
     "ui_assets.py",  # internal i18n dictionary (GRADIO_RU_EN_MAP), not user-facing
     "test_apply_patterns.py",  # test file with Cyrillic test data
+    "voice_preview.py",  # PREVIEW_PHRASES are synthesis data, not UI strings
 }
 
 EXCLUDED_PREFIXES = (

@@ -1,4 +1,5 @@
 import os
+import re
 import torch
 import gc
 import numpy as np
@@ -55,6 +56,21 @@ def set_tts_device(mode):
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 now_dir = Path.cwd()
+
+# --- STRESS MARKS ---
+# "+" is an internal stress mark and must NEVER be pronounced.
+# It is stripped for every engine (Silero, Vosk, F5); only a real
+# math sign between digits is preserved.
+STRESS_AWARE_VERS = ()
+
+
+def strip_stress_marks(text):
+    if not text:
+        return text
+    text = re.sub(r"(?<=\d)\s*\+\s*(?=\d)", "<<PLUS>>", str(text))
+    text = text.replace("+", "")
+    return text.replace("<<PLUS>>", "+")
+
 
 class TTSModel:
     def __init__(self):
@@ -125,6 +141,7 @@ class TTSModel:
                 return None, f"Initialization error: {e}"
     
     def synth_audio(self, text, speaker_id, speed=1, noise=16, ref_audio=None, ref_text=''):
+        text = strip_stress_marks(text)  # "+" is never read aloud
         if self.ver in [3, 4, 7]:
             np_audio = self.model.apply_tts(text, speaker=speaker_id, sample_rate=48000)
             np_audio = np_audio.detach().numpy()

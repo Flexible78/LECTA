@@ -13,7 +13,9 @@ class TextParse:
     def preprocess(self, string):
         string = re.sub(r'°', 'градус', string)
         string = re.sub( '№|#', 'номер ', string)
-        string = re.sub( r'\+', 'плюс', string)
+        # "+" is a stress mark and must stay silent; only a real math
+        # sign between digits is spoken as a word.
+        string = re.sub(r'(?<=\d)\s*\+\s*(?=\d)', ' плюс ', string)
         string = self.profanity(string)
         string = self.len_check(string)
         string = self.replace_hrname(string)

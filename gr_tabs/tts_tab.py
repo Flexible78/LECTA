@@ -1,4 +1,5 @@
 import json
+import logging
 import random
 import re
 import tempfile
@@ -12,9 +13,10 @@ from pathlib import Path
 import gradio as gr
 import libs.multilingual_router as router  # для доступа к флагам USE_EDGE_*
 import numpy as np
-from config import AppConfig, config, TTS_WORKERS
+from config import AppConfig, config, TTS_WORKERS, TTS_COOLDOWN_SEC, TTS_GPU_TEMP_LIMIT_C, TTS_GPU_TEMP_RESUME_C
 from libs.accent import accentizer
 from libs.fb2_processor import FB2Processor
+from libs.thermal import get_gpu_temp
 from libs.multilingual_router import process_multilingual_text
 from libs.russian import normalize_russian
 from libs.tts import get_model_short_name, synth
@@ -31,6 +33,8 @@ from lxml import etree
 from pydub import AudioSegment, effects
 from pydub.utils import mediainfo
 
+logger = logging.getLogger(__name__)
+
 sound_dir = now_dir / "sound"
 stop_text_to_sp = False
 _synthesis_completed = False
@@ -38,6 +42,7 @@ txt_parser = TextParse(False)
 
 # ═══ ПЕРФ: глобальный executor + кэш сегментов (разделяется между проектами) ═══
 _tts_executor = ThreadPoolExecutor(max_workers=TTS_WORKERS)
+_tts_sema = threading.Semaphore(TTS_WORKERS)  # limits in-flight synthesis tasks
 _local_segment_cache = {}
 _local_cache_lock = threading.Lock()
 _local_tts_lock = threading.Lock()  # защита от GPU-конкуренции Silero/F5
@@ -229,7 +234,7 @@ def _safe_synth_static(text, speaker_id, speed, noise, use_accents, disable_norm
     txt = text if disable_norm else txt_parser.garbage(normalize_russian(text))
     if use_accents and not disable_norm:
         try:
-            txt = accentizer.process_accent(txt, r"\\+\\w+|\\w+\\+\\w+")
+            txt = accentizer.process_accent(txt, r"\+\w+|\w+\+\w+")
         except Exception:
             pass
     cache_key = f"{txt}|{speaker_id}|{speed}|{noise}"
@@ -463,6 +468,46 @@ def tts(
         pending_tasks = []  # ПЕРФ: задачи синтеза + аудио-эффекты (в порядке)
         chunk_timings = []  # ПЕРФ: замеры времени на каждый чанк
 
+        def _submit_text_task(txt):
+            """Submit a text chunk to the executor, throttled by semaphore.
+            Blocks until a worker slot is free."""
+            _tts_sema.acquire()
+            try:
+                f = _tts_executor.submit(
+                    _execute_text_chunk, txt, spk_sel, sp_rate, noise_lvl, use_accents,
+                    router.USE_EDGE_FOR_ENGLISH, router.USE_EDGE_FOR_HEBREW,
+                    router.USE_EDGE_FOR_RUSSIAN, router.DICTIONARY_MODE,
+                )
+            except Exception:
+                _tts_sema.release()
+                raise
+            f.add_done_callback(lambda _: _tts_sema.release())
+            return f
+
+        def _check_gpu_temp():
+            """Return GPU temp string for log, or empty string if unavailable."""
+            t = get_gpu_temp()
+            if t is not None:
+                return f"\n🌡 GPU: {t}°C"
+            return ""
+
+        def _wait_if_hot():
+            """Block with 1-second polls until GPU cools down, respecting stop flag.
+            Returns a status message suffix."""
+            temp = get_gpu_temp()
+            if temp is None or temp < TTS_GPU_TEMP_LIMIT_C:
+                return ""
+            waited = 0
+            while temp is not None and temp >= TTS_GPU_TEMP_LIMIT_C:
+                if stop_text_to_sp:
+                    return "\n🛑 Stop requested during cooldown"
+                if waited >= 300:  # 5 minutes max
+                    return f"\n⚠️ Cooldown timeout — continuing anyway (GPU: {temp}°C)"
+                time.sleep(1)
+                waited += 1
+                temp = get_gpu_temp()
+            return f"\n❄️ Cooled to {temp}°C after {waited}s"
+
         def flush_text_buffer():
             """ПЕРФ: собирает текст в pending_tasks вместо немедленного синтеза."""
             nonlocal text_buffer, buffer_lang, buffer_chars
@@ -473,12 +518,8 @@ def tts(
             buffer_lang = None
             buffer_chars = 0
             # Отправляем в executor — синтез будет выполнен параллельно
-            f = _tts_executor.submit(
-                _execute_text_chunk, joined, spk_sel, sp_rate, noise_lvl, use_accents,
-                router.USE_EDGE_FOR_ENGLISH, router.USE_EDGE_FOR_HEBREW,
-                router.USE_EDGE_FOR_RUSSIAN, router.DICTIONARY_MODE,
-            )
-            pending_tasks.append({"type": "text", "future": f})
+            f = _submit_text_task(joined)
+            pending_tasks.append({"type": "text", "future": f, "chars": len(joined)})
 
         for i, line in enumerate(root):
             if stop_text_to_sp:
@@ -526,16 +567,16 @@ def tts(
                 else:
                     rem_str = "Calculating..."
 
-                # Cap at 99% until final file is actually written
-                pct = min(99, int(current_line / total_lines * 100))
+                # Cap at 5% during Phase A (line parsing), actual synthesis is Phase B
+                pct = min(50, int(current_line / total_lines * 50))
 
                 html = get_metrics_html(
                     pct,
                     format_time_hms(elapsed),
                     rem_str,
-                    f"{speed:.1f} lines/s",
+                    (f"{speed:.1f} lines/s" if speed > 0 else "—"),
                 )
-                log_txt = f"▶ Working: {file}.xml\n🎙 Synthesizing line: {current_line} of {total_lines}..."
+                log_txt = f"📄 Preparing: {file}.xml\n📝 Line {current_line} of {total_lines}..."
                 # НЕ вызываем get_files_list каждые 3 строки — это запускает ffprobe на всех MP3!
                 # Возвращаем кэшированный список вместо [] чтобы таблица не мигала.
                 yield cached_files_list, log_txt, html, gr.update(), _build_file_index(ab_path, cached_files_list)
@@ -564,12 +605,9 @@ def tts(
                     task_meta["cite_position"] = line.get("position")
                 if line.tag == "empty-line":
                     task_meta["empty_line"] = True
-                f = _tts_executor.submit(
-                    _execute_text_chunk, line.text, spk_sel, sp_rate, noise_lvl, use_accents,
-                    router.USE_EDGE_FOR_ENGLISH, router.USE_EDGE_FOR_HEBREW,
-                    router.USE_EDGE_FOR_RUSSIAN, router.DICTIONARY_MODE,
-                )
+                f = _submit_text_task(line.text)
                 task_meta["future"] = f
+                task_meta["chars"] = len(line.text or "")
                 pending_tasks.append(task_meta)
             elif line.text:
                 # Обычный текст: language-aware batching
@@ -579,12 +617,8 @@ def tts(
                 # mixed-строки: сброс буфера + defer to executor
                 if line_lang == "mixed":
                     flush_text_buffer()
-                    f = _tts_executor.submit(
-                        _execute_text_chunk, stripped, spk_sel, sp_rate, noise_lvl, use_accents,
-                        router.USE_EDGE_FOR_ENGLISH, router.USE_EDGE_FOR_HEBREW,
-                        router.USE_EDGE_FOR_RUSSIAN, router.DICTIONARY_MODE,
-                    )
-                    pending_tasks.append({"type": "text_inline", "future": f})
+                    f = _submit_text_task(stripped)
+                    pending_tasks.append({"type": "text_inline", "future": f, "chars": len(stripped)})
                 else:
                     # Проверяем: можно ли добавить в текущий буфер?
                     can_batch = (
@@ -608,18 +642,49 @@ def tts(
         # Сбрасываем остатки буфера после цикла
         flush_text_buffer()
 
-        # ── ПЕРФ: разрешаем все отложенные задачи синтеза (futures) ──
+        # ── PHASE B: разрешаем все отложенные задачи синтеза (futures) ──
         text_task_count = sum(1 for t in pending_tasks if "future" in t)
+        total_tasks = text_task_count if text_task_count > 0 else len(pending_tasks)
+        done_tasks = 0
+        total_chars = sum(t.get("chars", 0) for t in pending_tasks) or 1
+        done_chars = 0
+        phase_b_start = time.monotonic()
+        last_phase_b_update = 0.0
+        # Rolling average for ETA (last 10 completed tasks)
+        chunk_times_deque = deque(maxlen=10)
         synthesis_failed = False
+        
+        # GPU temperature check before synthesis
+        cool_msg = _wait_if_hot()
+        
+        # Yield phase B start
+        yield (
+            cached_files_list,
+            f"🎙 Synthesizing chunk 0 of {total_tasks}...{_check_gpu_temp()}{cool_msg}",
+            get_metrics_html(50, format_time_hms(time.monotonic() - global_start_time), "Estimating...", "—"),
+            gr.update(),
+            _build_file_index(ab_path, cached_files_list),
+        )
+        
         try:
             for task in pending_tasks:
+                if stop_text_to_sp:
+                    was_interrupted = True
+                    break
+                    
                 if task["type"] == "text":
                     sr, np_audio, elapsed = task["future"].result()
                     chunk_timings.append(elapsed)
+                    chunk_times_deque.append(elapsed)
+                    done_tasks += 1
+                    done_chars += task.get("chars", 0)
                     audio_segments.append(_tts_to_audio(np_audio, sr))
                 elif task["type"] == "text_inline":
                     sr, np_audio, elapsed = task["future"].result()
                     chunk_timings.append(elapsed)
+                    chunk_times_deque.append(elapsed)
+                    done_tasks += 1
+                    done_chars += task.get("chars", 0)
                     audio = _tts_to_audio(np_audio, sr)
                     if task.get("cite"):
                         audio = add_reverb(audio)
@@ -638,18 +703,53 @@ def tts(
                 elif task["type"] == "break":
                     slt = task["time"] * 100
                     audio_segments.append(AudioSegment.silent(duration=slt))
+                
+                # Throttled phase B progress yield
+                now_b = time.monotonic()
+                should_yield = (
+                    done_tasks == total_tasks
+                    or (now_b - last_phase_b_update >= 0.5)
+                )
+                if now_b - last_phase_b_update >= 2.0:
+                    should_yield = True
+                
+                if should_yield and done_tasks > 0:
+                    last_phase_b_update = now_b
+                    frac = min(1.0, done_chars / total_chars)
+                    pct = min(99, 50 + int(frac * 49))
+                    elapsed_total = now_b - global_start_time
+                    
+                    # Real remaining time, measured from elapsed synthesis time
+                    phase_b_elapsed = max(0.001, now_b - phase_b_start)
+                    if done_chars > 0 and phase_b_elapsed > 1.0:
+                        chars_per_sec = done_chars / phase_b_elapsed
+                        rem_sec = (total_chars - done_chars) / chars_per_sec
+                        rem_str = format_time_hms(rem_sec)
+                        speed_str = f"{chars_per_sec:.0f} chars/s"
+                    else:
+                        rem_str = "Estimating..."
+                        speed_str = "Estimating..."
+                    
+                    yield (
+                        cached_files_list,
+                        f"🎙 Synthesizing chunk {done_tasks} of {total_tasks}...{_check_gpu_temp()}",
+                        get_metrics_html(pct, format_time_hms(elapsed_total), rem_str, speed_str),
+                        gr.update(),
+                        _build_file_index(ab_path, cached_files_list),
+                    )
         except Exception:
+            logger.exception(f"Synthesis failed at chunk {done_tasks} of {total_tasks}")
             synthesis_failed = True
 
         if synthesis_failed:
             yield (
                 get_files_list(ab_path),
-                f"❌ Failed! Error in {short_final}.xml",
+                f"❌ Failed at chunk {done_tasks} of {total_tasks} in {short_final}.xml",
                 get_metrics_html(
-                    min(99, int(current_line / total_lines * 100)) if total_lines > 0 else 0,
+                    99,
                     format_time_hms(time.monotonic() - global_start_time),
                     "-",
-                    f"failed at {current_line} of {total_lines}",
+                    f"failed at chunk {done_tasks} of {total_tasks}",
                 ),
                 gr.update(),
                 _build_file_index(ab_path, get_files_list(ab_path)),
@@ -721,49 +821,41 @@ def tts(
             json.dump(parse_times, f)
 
         if was_interrupted:
-            pct = min(99, int(current_line / total_lines * 100)) if total_lines > 0 else 0
             yield (
                 get_files_list(ab_path),
                 f"🛑 Stopped! Partial file saved as {short_final}_PARTIAL.mp3",
                 get_metrics_html(
-                    pct,
+                    99,
                     format_time_hms(time.monotonic() - global_start_time),
                     "-",
-                    f"stopped at {current_line} of {total_lines}",
+                    f"stopped at chunk {done_tasks} of {total_tasks}",
                 ),
                 _safe_audio(last_final_mp3_path),
                 _build_file_index(ab_path, get_files_list(ab_path)),
             )
             return  # Выходим из функции полностью, чтобы не начинать следующий файл
 
-        # Обновляем кэш после сохранения нового файла
+        # ── PHASE C: Writing MP3, then 100% only when file is on disk ──
+        # Update cache after saving new file
         cached_files_list = get_files_list(ab_path)
-        # Вывод об обновлении файла (если не прервано)
         elapsed_now = time.monotonic() - global_start_time
-        pct = min(99, int(current_line / total_lines * 100))
-        overall_speed = current_line / elapsed_now if elapsed_now > 0 else 0
-        remaining_lines = total_lines - current_line
-        if len(recent_line_times) >= 3:
-            first_rt = recent_line_times[0]
-            latest_rt = recent_line_times[-1]
-            recent_lines_rt = latest_rt[0] - first_rt[0]
-            recent_time_rt = latest_rt[1] - first_rt[1]
-            rec_spd = recent_lines_rt / recent_time_rt if recent_time_rt > 0 else overall_speed
-        else:
-            rec_spd = overall_speed
-        rem_str = format_time_hms(remaining_lines / rec_spd) if rec_spd > 0 else "Calculating..."
+        # Phase C: yield "Writing MP3..."
         yield (
             cached_files_list,
-            f"✅ Saved: {short_final}.mp3",
-            get_metrics_html(
-                pct,
-                format_time_hms(elapsed_now),
-                rem_str,
-                "-",
-            ),
+            f"💾 Writing {short_final}.mp3...",
+            get_metrics_html(99, format_time_hms(elapsed_now), "00:00", "Writing MP3..."),
             _safe_audio(last_final_mp3_path),
             _build_file_index(ab_path, cached_files_list),
         )
+        # Confirm file is on disk, then show 100%
+        if Path(save_path).is_file():
+            yield (
+                cached_files_list,
+                f"✅ Saved: {short_final}.mp3",
+                get_metrics_html(100, format_time_hms(elapsed_now), "00:00", "—"),
+                _safe_audio(last_final_mp3_path),
+                _build_file_index(ab_path, cached_files_list),
+            )
 
     # ФИНАЛ — only now can we show 100%
     _synthesis_completed = True
@@ -1509,6 +1601,29 @@ def batch_tts_all_projects(
         )
         processed_count += 1
 
+        # ── BF14: Cooldown between files in batch mode ──
+        if TTS_COOLDOWN_SEC > 0 and idx < total:
+            cool_msg = f"\n❄️ Cooling down {TTS_COOLDOWN_SEC}s..."
+            elapsed_c = time.monotonic() - global_start
+            batch_html_c = get_batch_metrics_html(
+                f"project {idx} of {total} — {project}",
+                100,
+                idx,
+                total,
+                int(idx / total * 100),
+                format_time_hms(elapsed_c),
+                format_time_hms(TTS_COOLDOWN_SEC),
+                "Cooling down...",
+            )
+            yield all_files, f"[{idx}/{total}] {project}: ✅ done{cool_msg}", batch_html_c, gr.update(), batch_file_index
+            # Interruptible sleep
+            slept = 0
+            while slept < TTS_COOLDOWN_SEC:
+                if stop_text_to_sp:
+                    break
+                time.sleep(1)
+                slept += 1
+
         # НАКАПЛИВАЕМ: добавляем MP3 завершённого проекта в общий список
         project_files = get_files_list(project)
         for r in project_files:
@@ -1726,7 +1841,7 @@ def tts_tab(ab_path, tts_state):
             type="array",
             wrap=True,
         )
-        audio_player = gr.Audio(label="Player", type="filepath", interactive=False, autoplay=True)
+        audio_player = gr.Audio(label="Player", type="filepath", interactive=False, autoplay=False)
         completion_sound_html = gr.HTML(visible=False)
 
         # ── Панель управления файлами (объединены логически) ──

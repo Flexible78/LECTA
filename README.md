@@ -44,7 +44,9 @@ See [NOTICE.md](NOTICE.md) for full attribution and licensing notes.
 - **Batch synthesis** — process all projects in one run with a two-level progress bar, per-project download and a ZIP of all results.
 - **Stress placement** — RuAccent or Silero Stress for correct Russian word stress.
 - **Model management** — delete voice models with on-disk size display and free-space reporting. Active models are protected from accidental deletion.
+- **Voice preview** — hear the selected voice instantly before starting a full synthesis.
 - **Find & remove fragments** — multi-replace panel with clipboard integration, regex support, whole-line mode, and undo stack (up to 10 steps).
+- **Thermal protection** — ECO mode reduces GPU load. Automatic cooldown pauses prevent overheating on long books.
 - **Custom sounds** — insert event sounds, pauses and background music at specific text markers.
 
 ---
@@ -119,7 +121,10 @@ python start.py
 | `LECTA_PORT` | `7860` | Port for the Gradio UI (`app.py`) |
 | `LECTA_PROXY_PORT` | `8080` | Port for the Gemini API proxy (`start.py`) |
 | `LECTA_MODELS_DIR` | `models` | Directory containing voice model files |
-| `LECTA_TTS_WORKERS` | `8` | Number of parallel TTS worker threads |
+| `LECTA_TTS_WORKERS` | `4` | Number of parallel TTS synthesis tasks |
+| `LECTA_TTS_COOLDOWN_SEC` | `0` | Pause between files in batch mode, seconds |
+| `LECTA_GPU_TEMP_LIMIT` | `83` | Soft GPU temperature limit, °C. Pauses synthesis when reached |
+| `LECTA_GPU_TEMP_RESUME` | `76` | Temperature, °C, at which synthesis resumes after cooldown |
 
 ---
 
@@ -139,3 +144,42 @@ python start.py
 ## Author
 
 Alexander Tsyrkin (Flexible78)
+
+---
+
+## Changelog - 2026-08-14
+
+### Stress marks are never pronounced
+
+- `+` inside a word is an internal stress mark. It stays in the text and in the parsed
+  XML, but it is stripped right before synthesis for every engine (Silero, Vosk, F5) and
+  before the Edge cloud request, so no voice reads it aloud as the word plus.
+- Only a real math sign between digits (`2+2`) is still spoken as a word.
+
+### The player no longer starts by itself
+
+- The result player uses `autoplay=False`. A finished MP3 is loaded into the player, but
+  playback starts only when you press play. Voice previews and the completion chime are
+  unchanged, because they are explicit actions.
+
+### File splitting follows the source document
+
+- `FB2Processor.split_sections()` produces exactly one audio file per section that already
+  exists in the source file. Sections that contain sub-sections are no longer split into
+  additional files.
+
+### Real-time progress and ETA
+
+- Phase 1 (text preparation) fills 0-50 %, phase 2 (synthesis) fills 50-99 %, and 100 % is
+  shown only after the MP3 has been written to disk.
+- Progress is computed from the number of characters actually synthesized; ETA and speed
+  are derived from the real elapsed time (chars/s) instead of a rolling chunk average.
+
+### UI refresh - LECTA design system
+
+- New dark slate and amber theme built on CSS custom properties (`--lecta-*`) in
+  `libs/ui_assets.py`.
+- Sticky tab bar with a clearly highlighted active tab, card-styled blocks, consistent
+  inputs with visible focus rings, primary/secondary button hierarchy, a red Stop button,
+  larger primary actions, styled tables and scrollbars, responsive layout and
+  `prefers-reduced-motion` support.

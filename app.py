@@ -41,6 +41,7 @@ from libs.system_tools import (
     get_voice_models_choices, update_voice_model, update_all_voice_models,
     check_all_voice_models, stop_model_update, quick_check_models_local
 )
+from libs.voice_preview import preview_voice, PREVIEW_PHRASES
 from libs.multilingual_router import process_multilingual_text
 import libs.multilingual_router as router
 from libs.fb2_processor import FB2Processor 
@@ -445,6 +446,16 @@ with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew")
                 interactive=True
             )
         
+        with gr.Row():
+            eco_btn = gr.Button("♻ ECO (quiet / cool)", size="sm", elem_id="eco_btn",
+                variant="secondary")
+        
+        gr.Markdown("---")
+        with gr.Row():
+            preview_voice_btn = gr.Button("▶ Preview voice", size="sm", elem_id="preview_voice_btn")
+        preview_audio = gr.Audio(label="Voice preview", type="filepath", interactive=False, autoplay=True, visible=False)
+        preview_status = gr.Markdown("")
+        
         gr.Markdown("---")
         fast_ru_cb = gr.Checkbox(label="⚡ Russian via cloud (Edge TTS)", value=router.USE_EDGE_FOR_RUSSIAN, info="Instant speed! Requires internet. Voice: Dmitry")
         fast_eng_cb = gr.Checkbox(label="⚡ English via cloud", value=router.USE_EDGE_FOR_ENGLISH, info="Fast generation via Microsoft Edge")
@@ -654,12 +665,40 @@ with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew")
     def set_dict_mode(val):
         router.DICTIONARY_MODE = val
         AppConfig.save_user_settings({'dict_mode': val})
+    
+    def eco_preset():
+        """Apply ECO mode: reduce workers, add cooldown, lower temp limit."""
+        import config as cfg
+        import gr_tabs.tts_tab as ttab
+        cfg.TTS_COOLDOWN_SEC = 15
+        cfg.TTS_GPU_TEMP_LIMIT_C = 78
+        cfg.TTS_GPU_TEMP_RESUME_C = 70
+        # Recreate semaphore with 2 permits
+        try:
+            new_sema = threading.Semaphore(2)
+            ttab._tts_sema = new_sema
+        except Exception:
+            pass
+        return "♻ ECO mode: 2 workers, cooldown 15 s, temp limit 78°C"
+    
+    def preview_voice_handler(tts_model_val, spk):
+        """Handler for preview voice button."""
+        if not tts_model_val:
+            return "⚠️ Select a TTS model first", gr.update(visible=False)
+        return preview_voice(tts_model_val, spk)
         
     device_radio.change(fn=set_tts_device, inputs=device_radio, outputs=tts_status)
     fast_ru_cb.change(set_fast_russian, inputs=fast_ru_cb, outputs=[])
     fast_eng_cb.change(set_fast_english, inputs=fast_eng_cb, outputs=[])
     fast_heb_cb.change(set_fast_hebrew, inputs=fast_heb_cb, outputs=[])
     dict_mode_cb.change(set_dict_mode, inputs=dict_mode_cb, outputs=[])
+
+    eco_btn.click(fn=eco_preset, outputs=tts_status)
+    preview_voice_btn.click(
+        fn=preview_voice_handler,
+        inputs=[tts_sel, spk_sel],
+        outputs=[preview_status, preview_audio]
+    )
 
     tts_sel.select(tts_model_load, inputs=tts_sel, outputs=[tts_state, tts_status], show_progress_on=tts_status)
     acc_sel.select(acc_model_load, inputs=acc_sel, outputs=[acc_state, acc_status], show_progress_on=acc_status)

@@ -86,23 +86,14 @@ class FB2Processor:
         return notes
 
     def split_sections(self, in_xml: etree._Element) -> List[Dict[str, dict]]:
+        """One output file per section that already exists in the source book.
+
+        The structure of the source file is respected as-is: sections that
+        contain sub-sections are NOT split into additional files any more.
+        """
         sections = []
         for index, sect in enumerate(in_xml.xpath("./section"), start=1):
-            if (sub_sects := sect.xpath("./section")):
-                titles = sect.xpath("./title")
-                if len(titles) >= 1:
-                    title_text = ''
-                    for title in titles:
-                        for sel in title:
-                            if sel.text is not None:
-                                title_text = title_text + sel.text + '. '
-                for sub_index, sub_sect in enumerate(sub_sects, start=1):
-                    if sub_index == 1:
-                        sections.append({f'{index}_{sub_index}': {'sect': sub_sect, 'title': title_text}})
-                    else:
-                        sections.append({f'{index}_{sub_index}': {'sect': sub_sect}})
-            else:
-                sections.append({f'{index}': {'sect': sect}})
+            sections.append({f'{index}': {'sect': sect}})
 
         return sections
 

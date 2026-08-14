@@ -12,9 +12,24 @@ APP_NAME = "TTS-Server"
 LECTA_REPO_URL = "https://github.com/Flexible78/LECTA"
 
 
-# Configurable TTS worker thread count. Default 8 (matches the previous hardcoded value).
+# Number of simultaneous TTS synthesis tasks. Reduced from 8 to 4 to keep GPU
+# temperature under control (8 parallel F5-TTS on 6 GB VRAM caused 88 °C).
 # Override with the LECTA_TTS_WORKERS environment variable.
-TTS_WORKERS = int(os.getenv("LECTA_TTS_WORKERS", "8"))
+TTS_WORKERS = int(os.getenv("LECTA_TTS_WORKERS", "4"))
+
+# Pause between files in batch mode, seconds (0 = disabled).
+TTS_COOLDOWN_SEC = int(os.getenv("LECTA_TTS_COOLDOWN_SEC", "0"))
+
+# Soft GPU temperature threshold, °C. Synthesis pauses when reached.
+TTS_GPU_TEMP_LIMIT_C = int(os.getenv("LECTA_GPU_TEMP_LIMIT", "83"))
+
+# Temperature to resume synthesis after a cooldown pause, °C.
+# Must be noticeably lower than the limit.
+TTS_GPU_TEMP_RESUME_C = int(os.getenv("LECTA_GPU_TEMP_RESUME", "76"))
+
+# GPU power limit in watts. Requires nvidia-smi AND administrator rights,
+# therefore not used by default. Change manually only.
+TTS_GPU_POWER_LIMIT_W = None
 # Path.home() может вернуть относительный путь (например 'tmp'), если
 # USERPROFILE/appdata заданы как относительные в Start.cmd (портабельная сборка).
 # Разрешаем относительно каталога config.py (fb2tts/), чтобы путь всегда был абсолютным.

@@ -14,6 +14,8 @@ The sidebar is always visible on the left.
 | **Select TTS model** | Choose the speech engine: Vosk 0.10, Silero v5_5, Silero v5_cis, Misha24-10 (F5-TTS), ESpeech-TTS (F5-TTS), Silero English v3 |
 | **Stress placement** | Choose the stress model: RuAccent or Silero Stress (Russian only) |
 | **Compute device** | `auto` = GPU if available (fast, ≥ 6 GB VRAM), `cpu` = RAM only (slower) |
+| **♻ ECO (quiet / cool)** | Reduce workers to 2, add cooldown, lower temp limit to 78 °C |
+| **▶ Preview voice** | Play a short phrase with the selected voice (cached for instant replay) |
 | **⚡ Russian via cloud** | Use Microsoft Edge TTS for Russian (instant, needs internet, voice: Dmitry) |
 | **⚡ English via cloud** | Use Microsoft Edge TTS for English |
 | **⚡ Hebrew via cloud** | Use Microsoft Edge TTS for Hebrew (recommended — no local Hebrew backend exists) |
@@ -186,6 +188,47 @@ Customise the `data/` and `models/` directories. Changes are saved to
 ### 🔔 Completion sound
 
 Choose a `.wav` file to play when TTS finishes.
+
+### Preview voice
+
+> Located in the sidebar, between the ECO button and the cloud checkboxes.
+
+Click **▶ Preview voice** to hear the currently selected TTS model speak a
+short demo phrase. The result is cached in `tmp/voice_preview/`, so clicking
+again on the same model+speaker plays instantly without re-synthesising.
+
+- The phrase is chosen by language: Russian models speak Russian, English
+  models speak English.
+- After changing the speaker in the Demo TTS tab, the old preview is cleared.
+- During an active synthesis run, the preview button is disabled — only one
+  TTS operation may use the GPU at a time.
+
+### Temperature and ECO mode
+
+The **♻ ECO** button in the sidebar reduces the GPU load to keep temperatures
+low during long books:
+
+- **Workers:** 2 instead of the default 4
+- **Cooldown:** 15 seconds between files in batch mode
+- **Temperature limit:** 78 °C (default: 83 °C)
+
+Even without ECO mode, the app has automatic thermal protection:
+- When the GPU reaches `LECTA_GPU_TEMP_LIMIT` (83 °C by default), synthesis
+  pauses until the temperature drops to `LECTA_GPU_TEMP_RESUME` (76 °C).
+- A cooldown message `🌡 GPU 88°C — cooling down, resuming at 76°C`
+  appears in the TTS log.
+- The maximum wait is 5 minutes, after which synthesis continues with a warning.
+- On machines without an NVIDIA GPU, all thermal logic is silently disabled —
+  nothing changes and no errors appear.
+
+Environment variables for tuning:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LECTA_TTS_WORKERS` | `4` | Parallel synthesis tasks (was 8, reduced for thermal safety) |
+| `LECTA_TTS_COOLDOWN_SEC` | `0` | Pause between files in batch mode |
+| `LECTA_GPU_TEMP_LIMIT` | `83` | GPU temperature where synthesis pauses |
+| `LECTA_GPU_TEMP_RESUME` | `76` | GPU temperature where synthesis resumes |
 
 ### Find & remove repeated fragments
 
@@ -370,3 +413,32 @@ Replace `<first_commit>` and `<last_commit>` with the actual hashes from the
 > Note: The `ui-legacy-2026-07` tag and `ui-legacy` branch were created before
 > the redesign and point to the last pre-redesign commit. They are not pushed
 > to the remote.
+
+---
+
+## Stress marks, playback and progress (2026-08-14)
+
+**Stress marks.** Russian stress marks are written as `+` before the stressed vowel
+(pri+vet). They belong to the text and stay in the parsed XML, so you can still edit them
+in the ANALYZE editor, but they are removed at the moment of synthesis. No engine (Silero,
+Vosk, F5 or Edge cloud) pronounces them. A real math sign between digits (`2+2`) is still
+read as a word.
+
+**Playback.** The generated MP3 is placed in the player as soon as it is ready, but it does
+not start playing on its own. Press play when you want to listen. The short completion
+chime and the voice preview buttons still play immediately, because they are explicit
+actions.
+
+**File splitting.** One MP3 is produced per section of the source document. If the source
+file has no internal sections you get a single file, and sub-sections no longer create
+extra files.
+
+**Progress bar.** The bar reflects real work: 0-50 % is text preparation, 50-99 % is
+synthesis measured in characters actually processed, and 100 % appears only after the MP3
+has been written. Elapsed time, remaining time and speed (chars/s) are computed from the
+real elapsed time of the run.
+
+**Interface.** The UI uses the LECTA design system: a sticky tab bar with a highlighted
+active tab, card-based panels, uniform inputs with focus rings, a clear primary/secondary
+button hierarchy and a red Stop button. Keyboard shortcuts are unchanged: Ctrl+Enter runs
+the active action, Ctrl+S saves XML, Esc stops synthesis.

@@ -223,6 +223,9 @@ def _run_async_safely(coroutine_func, timeout=120):
         return future.result(timeout=timeout)
 
 def get_edge_audio(text, voice="he-IL-AvriNeural", target_sr=24000, max_retries=2):
+    # "+" is a stress mark: Edge TTS must never pronounce it.
+    text = re.sub(r"(?<=\d)\s*\+\s*(?=\d)", "<<PLUS>>", text or "")
+    text = text.replace("+", "").replace("<<PLUS>>", "+")
     clean_text = text.replace('"', '').replace("'", '').strip()
     if not clean_text:
         return create_silence(0.5, target_sr)

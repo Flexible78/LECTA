@@ -126,7 +126,10 @@ python app.py
 | `LECTA_PORT` | `7860` | Port for the Gradio UI |
 | `LECTA_PROXY_PORT` | `8080` | Port for the Gemini API proxy (`start.py`) |
 | `LECTA_MODELS_DIR` | `models` | Directory containing voice model files |
-| `LECTA_TTS_WORKERS` | `8` | Number of parallel TTS worker threads |
+| `LECTA_TTS_WORKERS` | `4` | Number of parallel TTS synthesis tasks |
+| `LECTA_TTS_COOLDOWN_SEC` | `0` | Pause between files in batch mode, seconds |
+| `LECTA_GPU_TEMP_LIMIT` | `83` | Soft GPU temperature limit, °C. Synthesis pauses when reached |
+| `LECTA_GPU_TEMP_RESUME` | `76` | Temperature, °C, at which synthesis resumes after cooldown |
 
 All variables are optional. The defaults work for a standard local setup.
 

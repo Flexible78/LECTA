@@ -2,48 +2,214 @@
 import json
 
 custom_css = """
-/* Force custom HTML progress bar fill widths via CSS custom properties.
-   Gradio 6 may override inline width on divs inside gr.HTML, so we
-   use !important with a variable set via inline style. */
-.lecta-pb-fill { width: var(--pb-pct, 0%) !important; }
-
-/* Style Gradio's built-in progress bar (used during model loading) */
-.progress-level { background-color: #1a1a1a !important; border-radius: 4px !important; }
-.progress-level > div[style*="width"], .progress-bar {
-    background-color: #FF8C00 !important; 
-    background-image: linear-gradient(45deg, rgba(255, 255, 255, 0.15) 25%, transparent 25%, transparent 50%, rgba(255, 255, 255, 0.15) 50%, rgba(255, 255, 255, 0.15) 75%, transparent 75%, transparent) !important;
-    background-size: 1rem 1rem !important;
-    animation: progress-stripes 1s linear infinite !important;
+/* ====================================================================
+   LECTA design system - production UI theme
+   Surfaces: deep slate | Accent: amber | Data: cyan / emerald / rose
+   ==================================================================== */
+:root {
+  --lecta-bg: #0b1120;
+  --lecta-surface: #111827;
+  --lecta-surface-2: #1e293b;
+  --lecta-surface-3: #24334a;
+  --lecta-border: #334155;
+  --lecta-border-strong: #475569;
+  --lecta-text: #f8fafc;
+  --lecta-text-dim: #94a3b8;
+  --lecta-accent: #f97316;
+  --lecta-accent-2: #ea580c;
+  --lecta-info: #38bdf8;
+  --lecta-ok: #10b981;
+  --lecta-err: #f43f5e;
+  --lecta-radius: 12px;
+  --lecta-radius-sm: 8px;
+  --lecta-shadow: 0 8px 24px rgba(2, 6, 23, 0.45);
+  --lecta-focus: 0 0 0 3px rgba(249, 115, 22, 0.35);
 }
-@keyframes progress-stripes { from { background-position: 1rem 0; } to { background-position: 0 0; } }
-.progress-text, .eta-text, .progress-info { color: #87CEEB !important; font-weight: bold !important; text-shadow: 1px 1px 2px #000000 !important; opacity: 1 !important; display: inline-block !important; }
-.meta-text, .eta-level { text-align: right !important; display: block !important; width: 100% !important; }
 
-/* Hide the Gradio footer — not needed in a local tool */
-footer { display: none !important; }
+/* --- App shell --- */
+gradio-app, .gradio-container {
+  background: radial-gradient(1200px 600px at 15% -10%, #172033 0%, var(--lecta-bg) 55%) !important;
+  color: var(--lecta-text) !important;
+}
+.gradio-container { max-width: 1500px !important; margin: 0 auto !important; }
+.gradio-container h1 { letter-spacing: -0.02em !important; }
+.gradio-container h1, .gradio-container h2, .gradio-container h3 { color: var(--lecta-text) !important; }
 
+/* --- Tab bar: sticky, obvious active state --- */
+.tab-nav, .tabs > .tab-nav {
+  position: sticky !important;
+  top: 0 !important;
+  z-index: 40 !important;
+  gap: 4px !important;
+  padding: 6px !important;
+  border: 1px solid var(--lecta-border) !important;
+  border-radius: var(--lecta-radius) !important;
+  background: rgba(17, 24, 39, 0.92) !important;
+  backdrop-filter: blur(8px) !important;
+  box-shadow: var(--lecta-shadow) !important;
+  overflow-x: auto !important;
+}
+.tab-nav button {
+  border: 1px solid transparent !important;
+  border-radius: var(--lecta-radius-sm) !important;
+  padding: 9px 16px !important;
+  font-weight: 600 !important;
+  font-size: 14px !important;
+  color: var(--lecta-text-dim) !important;
+  background: transparent !important;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.1s ease !important;
+  white-space: nowrap !important;
+}
+.tab-nav button:hover { color: var(--lecta-text) !important; background: var(--lecta-surface-3) !important; }
+.tab-nav button.selected {
+  color: #0b1120 !important;
+  background: linear-gradient(180deg, var(--lecta-accent), var(--lecta-accent-2)) !important;
+  box-shadow: 0 2px 10px rgba(249, 115, 22, 0.35) !important;
+}
 
-
-/* Block card visual language */
+/* --- Cards / blocks --- */
+.block, .form, .gr-box, .panel {
+  background: var(--lecta-surface) !important;
+  border: 1px solid var(--lecta-border) !important;
+  border-radius: var(--lecta-radius) !important;
+}
 .block-card {
-  background: #1e293b !important;
-  border-radius: 8px !important;
-  padding: 12px !important;
-  border: 1px solid #334155 !important;
+  background: var(--lecta-surface-2) !important;
+  border: 1px solid var(--lecta-border) !important;
+  border-radius: var(--lecta-radius) !important;
+  padding: 14px !important;
+  box-shadow: var(--lecta-shadow) !important;
 }
 .block-card h3 {
-  color: #38bdf8 !important;
-  font-size: 13px !important;
+  color: var(--lecta-info) !important;
+  font-size: 12px !important;
   text-transform: uppercase !important;
-  letter-spacing: 0.05em !important;
-  margin-bottom: 8px !important;
+  letter-spacing: 0.08em !important;
+  margin-bottom: 10px !important;
 }
 
-/* Ensure status/readonly textboxes have enough height instead of one-line scrollers */
-textarea[readonly] {
-  min-height: 40px !important;
+/* --- Labels and helper text --- */
+label > span, .gr-form label, span[data-testid=block-info] {
+  color: var(--lecta-text-dim) !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.03em !important;
 }
 
+/* --- Inputs --- */
+input[type=text], input[type=number], input[type=password], textarea, .gr-input, select {
+  background: #0f172a !important;
+  color: var(--lecta-text) !important;
+  border: 1px solid var(--lecta-border) !important;
+  border-radius: var(--lecta-radius-sm) !important;
+}
+input[type=text]:focus, input[type=number]:focus, textarea:focus, select:focus {
+  border-color: var(--lecta-accent) !important;
+  box-shadow: var(--lecta-focus) !important;
+  outline: none !important;
+}
+textarea[readonly] { min-height: 40px !important; color: var(--lecta-text-dim) !important; }
+
+/* --- Buttons --- */
+button.primary, .gr-button-primary {
+  background: linear-gradient(180deg, var(--lecta-accent), var(--lecta-accent-2)) !important;
+  color: #0b1120 !important;
+  border: none !important;
+  font-weight: 700 !important;
+  border-radius: var(--lecta-radius-sm) !important;
+  box-shadow: 0 4px 14px rgba(249, 115, 22, 0.28) !important;
+}
+button.secondary, .gr-button-secondary {
+  background: var(--lecta-surface-3) !important;
+  color: var(--lecta-text) !important;
+  border: 1px solid var(--lecta-border-strong) !important;
+  border-radius: var(--lecta-radius-sm) !important;
+  font-weight: 600 !important;
+}
+button:hover:not(:disabled) { transform: translateY(-1px) !important; filter: brightness(1.06) !important; }
+button:active:not(:disabled) { transform: translateY(0) !important; filter: brightness(0.96) !important; }
+button:focus-visible { box-shadow: var(--lecta-focus) !important; outline: none !important; }
+button:disabled { opacity: 0.5 !important; cursor: not-allowed !important; }
+#tts_btn button, #batch_tts_btn button, #parse_btn button, #fb2_gen_btn button, #demo_tts_btn button {
+  min-height: 46px !important;
+  font-size: 15px !important;
+  letter-spacing: 0.02em !important;
+}
+#stop_btn button {
+  background: linear-gradient(180deg, #fb7185, #e11d48) !important;
+  color: #ffffff !important;
+  border: none !important;
+  font-weight: 700 !important;
+}
+
+/* --- Accordions --- */
+.gr-accordion, details {
+  border: 1px solid var(--lecta-border) !important;
+  border-radius: var(--lecta-radius) !important;
+  background: var(--lecta-surface) !important;
+}
+.gr-accordion > .label-wrap, details > summary { font-weight: 600 !important; color: var(--lecta-text) !important; }
+
+/* --- Tables --- */
+.gr-dataframe table, table { border-collapse: collapse !important; }
+.gr-dataframe thead th, table thead th {
+  background: var(--lecta-surface-3) !important;
+  color: var(--lecta-text-dim) !important;
+  text-transform: uppercase !important;
+  font-size: 11px !important;
+  letter-spacing: 0.06em !important;
+}
+.gr-dataframe tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.02) !important; }
+.gr-dataframe tbody tr:hover { background: rgba(249, 115, 22, 0.08) !important; }
+
+/* --- Sliders and checkboxes --- */
+input[type=range] { accent-color: var(--lecta-accent) !important; }
+input[type=checkbox], input[type=radio] { accent-color: var(--lecta-accent) !important; }
+
+/* --- Custom HTML progress bars ---
+   Gradio may override inline width on divs inside gr.HTML, so the fill
+   width is delivered through a CSS custom property with !important. */
+.lecta-pb-fill {
+  width: var(--pb-pct, 0%) !important;
+  background-image: linear-gradient(90deg, var(--lecta-accent-2), var(--lecta-accent)) !important;
+  transition: width 0.25s ease !important;
+}
+
+/* Gradio built-in progress bar (model loading) */
+.progress-level { background-color: #0f172a !important; border-radius: 6px !important; }
+.progress-level > div[style*=width], .progress-bar {
+  background-color: var(--lecta-accent) !important;
+  background-image: linear-gradient(45deg, rgba(255, 255, 255, 0.15) 25%, transparent 25%, transparent 50%, rgba(255, 255, 255, 0.15) 50%, rgba(255, 255, 255, 0.15) 75%, transparent 75%, transparent) !important;
+  background-size: 1rem 1rem !important;
+  animation: progress-stripes 1s linear infinite !important;
+}
+@keyframes progress-stripes { from { background-position: 1rem 0; } to { background-position: 0 0; } }
+.progress-text, .eta-text, .progress-info {
+  color: var(--lecta-info) !important;
+  font-weight: 700 !important;
+  opacity: 1 !important;
+  display: inline-block !important;
+}
+.meta-text, .eta-level { text-align: right !important; display: block !important; width: 100% !important; }
+
+/* --- Scrollbars --- */
+* { scrollbar-color: var(--lecta-border-strong) transparent; scrollbar-width: thin; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--lecta-border-strong); border-radius: 8px; }
+*::-webkit-scrollbar-thumb:hover { background: var(--lecta-accent) !important; }
+
+/* --- Misc --- */
+footer { display: none !important; }
+.gradio-container .prose a { color: var(--lecta-info) !important; }
+@media (max-width: 900px) {
+  .tab-nav button { padding: 8px 10px !important; font-size: 13px !important; }
+  .gradio-container { padding: 8px !important; }
+}
+@media (prefers-reduced-motion: reduce) {
+  button:hover:not(:disabled) { transform: none !important; }
+  .lecta-pb-fill, .progress-bar { transition: none !important; animation: none !important; }
+}
 """
 
 # Dictionary of known Gradio Russian strings → English.
@@ -68,7 +234,9 @@ _ru_en_js = "{" + ", ".join(
     f"{json.dumps(k)}: {json.dumps(v)}" for k, v in GRADIO_RU_EN_MAP.items()
 ) + "}"
 
-custom_head = f"""
+# NOTE: _head_i18n IS an f-string (it interpolates _ru_en_js), therefore every
+# literal JS brace inside it MUST be doubled: {{ }}. Keep it that way.
+_head_i18n = f"""
 <script>
 // Clear any stored Gradio i18n preference so the MutationObserver
 // fallback below can take full effect.
@@ -122,6 +290,12 @@ try {{
   observer.observe(document.body, {{ subtree: true, characterData: true, childList: true }});
 }})();
 </script>
+"""
+
+# NOTE: _head_hotkeys is a PLAIN string (no f prefix) because this JS is full of
+# single braces. Never add an f prefix here — doing so raises
+# "SyntaxError: f-string: expecting a valid expression after '{'".
+_head_hotkeys = """
 <script>
 document.addEventListener('keydown', function(e) {
     if (e.ctrlKey && e.key === 'Enter') {
@@ -165,6 +339,8 @@ document.addEventListener('keydown', function(e) {
 });
 </script>
 """
+
+custom_head = _head_i18n + _head_hotkeys
 
 
 # ═══ TIME FORMATTERS ═══
