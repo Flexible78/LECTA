@@ -1,10 +1,53 @@
 import re
 import shutil
 import logging
+import zipfile
+import tempfile
 from pathlib import Path
 from libs.utils import data_path
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_zip(zip_path: Path) -> list[Path]:
+    """Extract a ZIP archive to a temp directory and return list of extracted file paths.
+    Supports nested zip files (extracts them recursively, 1 level deep)."""
+    extracted = []
+    tmp_dir = Path(tempfile.mkdtemp(prefix="fb2tts_zip_"))
+    try:
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            for member in zf.namelist():
+                # Skip directories and hidden files
+                if member.endswith("/") or member.startswith("."):
+                    continue
+                # Sanitize path to prevent zip-slip
+                safe_name = Path(member).name
+                if not safe_name:
+                    continue
+                dest = tmp_dir / safe_name
+                # Deduplicate
+                counter = 1
+                while dest.exists():
+                    dest = tmp_dir / f"{dest.stem}_{counter}{dest.suffix}"
+                    counter += 1
+                try:
+                    with zf.open(member) as src, open(dest, "wb") as dst:
+                        shutil.copyfileobj(src, dst)
+                    extracted.append(dest)
+                except Exception as e:
+                    logger.warning(f"ZIP extract error for {member}: {e}")
+        # Recursively extract nested zips (1 level)
+        nested_zips = [p for p in extracted if p.suffix.lower() == ".zip"]
+        for nz in nested_zips:
+            try:
+                extracted.remove(nz)
+                extracted.extend(_extract_zip(nz))
+            except Exception as e:
+                logger.warning(f"Nested ZIP extract error: {e}")
+    except Exception as e:
+        logger.error(f"ZIP archive error: {e}")
+        raise
+    return extracted
 
 def parse_and_save_document(file_path_str, remove_ru):
     dropbox_path = Path(file_path_str)
@@ -16,6 +59,13 @@ def parse_and_save_document(file_path_str, remove_ru):
     
     ab_path = data_path / ab_name
     ab_path.mkdir(parents=True, exist_ok=True)
+    
+    # Сохраняем путь к исходному файлу — фоновый воркер использует его,
+    # чтобы положить итоговый пакет из 3 файлов рядом с исходником.
+    try:
+        (ab_path / "_source_path.txt").write_text(str(Path(file_path_str).resolve()), encoding="utf-8")
+    except Exception:
+        pass
     
     cover_path = ab_path / "cover.jpg"
     if not cover_path.exists():
@@ -102,6 +152,34 @@ def parse_and_save_document(file_path_str, remove_ru):
         else:
             matches = re.findall(r'[А-Яа-яЁё0-9\s.,!?\-a-zA-Z]{4,}', dropbox_path.read_bytes().decode('cp1251', errors='ignore'))
             raw_text = "\n".join(matches)
+    elif ext == '.zip':
+        try:
+            extracted_files = _extract_zip(dropbox_path)
+            if not extracted_files:
+                return None, "ZIP archive is empty or contains no supported files"
+            all_texts = []
+            for ef in extracted_files:
+                ef_ext = ef.suffix.lower()
+                if ef_ext in ['.fb2', '.txt', '.md', '.html', '.htm', '.csv', '.json']:
+                    # Recursively call ourselves for each extracted file
+                    sub_name, sub_err = parse_and_save_document(str(ef), remove_ru)
+                    if sub_err:
+                        logger.warning(f"Skipping {ef.name}: {sub_err}")
+                    elif sub_name:
+                        logger.info(f"ZIP: extracted & processed {ef.name} → {sub_name}")
+                else:
+                    logger.info(f"ZIP: unsupported extension {ef_ext} for {ef.name}")
+            # Return first valid result, or error if none parsed
+            subdirs = [d for d in data_path.iterdir() if d.is_dir() and d.name != ab_name]
+            if subdirs:
+                first_new = sorted(subdirs, key=lambda x: x.stat().st_mtime, reverse=True)
+                ab_name = first_new[0].name
+                logger.info(f"ZIP: first extracted project = {ab_name}")
+                return ab_name, None
+            return None, "ZIP: no parsable files found inside"
+        except Exception as e:
+            logger.error(f"ZIP processing error: {e}")
+            return None, f"ZIP read error: {e}"
 
     if remove_ru:
         raw_text = re.sub(r'[А-Яа-яЁё]+', '', raw_text)

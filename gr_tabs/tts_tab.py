@@ -1,7 +1,10 @@
 import json
 import logging
+import os
 import random
 import re
+import subprocess
+import sys
 import tempfile
 import time
 from collections import deque
@@ -19,7 +22,7 @@ from libs.fb2_processor import FB2Processor
 from libs.thermal import get_gpu_temp
 from libs.multilingual_router import process_multilingual_text
 from libs.russian import normalize_russian
-from libs.tts import get_model_short_name, synth
+from libs.tts import get_device, get_model_short_name, synth
 from libs.tts_preprocessor import TextParse
 from libs.ui_assets import (
     format_audio_time,
@@ -47,10 +50,57 @@ _local_segment_cache = {}
 _local_cache_lock = threading.Lock()
 _local_tts_lock = threading.Lock()  # защита от GPU-конкуренции Silero/F5
 
+# ═══ THERMAL AUTO-THROTTLE ═══
+_last_temp_poll = 0.0
+_TEMP_POLL_INTERVAL = 3.0  # секунд между проверками
+_thermal_throttle_active = False
+
+
 # ═══ КАРТА МОДЕЛЕЙ ДЛЯ ОТСЛЕЖИВАНИЯ ═══
 # Сохраняет какое короткое имя модели использовалось для каждого MP3 файла.
 # Файл: data/<project>/tts_model_map.json  →  {"filename_stem": "Silero5_5", ...}
 _MODEL_MAP_FILE = "tts_model_map.json"
+
+
+def _poll_gpu_temp_thermal():
+    """Periodic GPU temperature check with auto-throttle.
+    Returns (is_hot_bool, temp_str_suffix).
+    
+    Every _TEMP_POLL_INTERVAL seconds, polls GPU temp via nvidia-smi.
+    If temp >= TTS_GPU_TEMP_LIMIT_C, sets _thermal_throttle_active and
+    blocks for 1-second intervals until cooldown or stop.
+    """
+    global _last_temp_poll, _thermal_throttle_active
+    now = time.monotonic()
+    if now - _last_temp_poll < _TEMP_POLL_INTERVAL:
+        if _thermal_throttle_active:
+            return True, f"\n🌡 GPU: throttling (>{TTS_GPU_TEMP_LIMIT_C}°C)"
+        t = get_gpu_temp()
+        if t is not None:
+            return False, f"\n🌡 GPU: {t}°C"
+        return False, ""
+    _last_temp_poll = now
+    temp = get_gpu_temp()
+    if temp is None:
+        _thermal_throttle_active = False
+        return False, ""
+    if temp >= TTS_GPU_TEMP_LIMIT_C:
+        _thermal_throttle_active = True
+        waited = 0
+        while temp is not None and temp >= TTS_GPU_TEMP_RESUME_C:
+            if stop_text_to_sp:
+                _thermal_throttle_active = False
+                return True, "\n🛑 Stop requested during thermal cooldown"
+            if waited >= 300:
+                _thermal_throttle_active = False
+                return True, f"\n⚠️ Cooldown timeout — continuing anyway (GPU: {temp}°C)"
+            time.sleep(1)
+            waited += 1
+            temp = get_gpu_temp()
+        _thermal_throttle_active = False
+        return False, f"\n❄️ Cooled to {temp}°C after {waited}s"
+    _thermal_throttle_active = False
+    return False, f"\n🌡 GPU: {temp}°C"
 
 
 def _load_model_map(ab_path):
@@ -237,13 +287,45 @@ def _safe_synth_static(text, speaker_id, speed, noise, use_accents, disable_norm
             txt = accentizer.process_accent(txt, r"\+\w+|\w+\+\w+")
         except Exception:
             pass
+    # ПЕРФ (CPU): F5-TTS inference steps напрямую определяют скорость на CPU.
+    # Принудительно ограничиваем nfe_step до 8 на CPU — выше почти неразличимо по качеству, но в 2-4 раза медленнее.
+    _is_cpu = get_device() == "cpu"
+    if _is_cpu and synth.ver in (5, 6) and noise:
+        try:
+            noise = min(int(noise), 8)
+        except Exception:
+            pass
+
     cache_key = f"{txt}|{speaker_id}|{speed}|{noise}"
     with _local_cache_lock:
         if cache_key in _local_segment_cache:
             return _local_segment_cache[cache_key]
-    # Защита GPU для Silero/F5: только один поток одновременно
-    with _local_tts_lock:
-        res = synth.synth_audio(txt, speaker_id=speaker_id, speed=speed, noise=noise)
+    # ПЕРФ: блокировка нужна только на GPU (конкуренция за CUDA-контекст).
+    # На CPU убираем её — иначе 4 worker'а сериализуются и скорость падает в N раз.
+    def _try_synth():
+        if _is_cpu:
+            return synth.synth_audio(txt, speaker_id=speaker_id, speed=speed, noise=noise)
+        with _local_tts_lock:
+            return synth.synth_audio(txt, speaker_id=speaker_id, speed=speed, noise=noise)
+
+    # ── АНТИ-КРАШ: при сбое синтеза (OOM/температура) чистим кэш CUDA,
+    # ждём 2 сек и пробуем ещё раз. Если не вышло — возвращаем None вместо
+    # падения всего процесса (роутер вставит тишину).
+    res = None
+    for attempt in range(2):
+        try:
+            res = _try_synth()
+            break
+        except Exception as e:
+            logger.warning(f"⚠️ Synth error (attempt {attempt+1}/2): {e}")
+            if attempt == 0:
+                try:
+                    import torch
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                except Exception:
+                    pass
+                time.sleep(2)
     if res is None:
         return None, None
     a, b = res
@@ -396,9 +478,16 @@ def tts(
     recent_line_times = deque(maxlen=20)
     last_progress_update = 0.0
 
+    _device = get_device()
+    init_msg = "⏳ Initializing engine..."
+    if _device == "cpu":
+        init_msg = ("⚠️ CPU mode — F5-TTS is 10–50× slower than GPU! "
+                    "Switch Compute device to 'auto' for GPU. "
+                    "(Use ECO button + thermal throttle to keep GPU cool.)")
+
     yield (
         cached_files_list,
-        "⏳ Initializing engine...",
+        init_msg,
         get_metrics_html(0, "00:00", "Estimating...", "0.0"),
         gr.update(),
         _build_file_index(ab_path, cached_files_list),
@@ -464,7 +553,7 @@ def tts(
         text_buffer = []
         buffer_lang = None  # текущий язык буфера
         buffer_chars = 0  # суммарная длина символов в буфере
-        _BATCH_MAX_CHARS = 4000  # ПЕРФ: увеличен для лучшего Edge TTS параллелизма
+        _BATCH_MAX_CHARS = 6000  # ПЕРФ: увеличен для лучшего F5-TTS параллелизма (Misha)
         pending_tasks = []  # ПЕРФ: задачи синтеза + аудио-эффекты (в порядке)
         chunk_timings = []  # ПЕРФ: замеры времени на каждый чанк
 
@@ -485,11 +574,10 @@ def tts(
             return f
 
         def _check_gpu_temp():
-            """Return GPU temp string for log, or empty string if unavailable."""
-            t = get_gpu_temp()
-            if t is not None:
-                return f"\n🌡 GPU: {t}°C"
-            return ""
+            """Return GPU temp string for log, or empty string if unavailable.
+            Delegates to _poll_gpu_temp_thermal for auto-throttle."""
+            is_hot, suffix = _poll_gpu_temp_thermal()
+            return suffix
 
         def _wait_if_hot():
             """Block with 1-second polls until GPU cools down, respecting stop flag.
@@ -1117,6 +1205,7 @@ def snd_list():
 
 def del_file(filename, ab_name, file_index, df_output):
     if not filename:
+        gr.Warning("Select a file in the table first, then click Delete")
         return df_output, file_index
     file_path = Path(filename)
     # Ищем отображаемое имя по реальному пути
@@ -1159,12 +1248,12 @@ def sel_file(data: gr.SelectData, ab_path, file_index):
     _, selected_path = _resolve_path(filename_raw, ab_path, file_index)
     stem_name = selected_path.stem
     return (
-        gr.update(interactive=True),
+        gr.update(),
         str(selected_path),
         gr.update(visible=True),
         gr.update(value=stem_name),
         str(selected_path),
-        gr.update(interactive=True),
+        gr.update(),
     )
 
 
@@ -1248,6 +1337,177 @@ def stop_tts():
     global stop_text_to_sp
     stop_text_to_sp = True
     return "🛑 Stopping after current line (saving file)..."
+
+
+# ═══ ФОНОВЫЙ ВОРКЕР (переживает закрытие GUI/браузера) ═══
+# Запускает полный цикл «парсинг + озвучка + пакет из 3 файлов» в отдельном
+# детачнутом процессе. GUI может упасть или быть закрытым — работа идёт.
+
+def _bg_status_path() -> Path:
+    return Path(__file__).resolve().parent.parent / "tmp" / "bg_worker_status.json"
+
+
+def _bg_worker_script() -> Path:
+    return Path(__file__).resolve().parent.parent / "worker.py"
+
+
+def _bg_log_path() -> Path:
+    return Path(__file__).resolve().parent.parent / "tmp" / "bg_worker.log"
+
+
+def launch_background_job(
+    ab_path,
+    spk_sel=None,
+    sp_rate=None,
+    back_sound_sel=None,
+    bitrate=None,
+    noise_lvl=None,
+    use_sound_effect=None,
+    use_accents=None,
+    repl=None,
+    selected_projects=None,
+):
+    """Запускает фоновый воркер (полный цикл: парсинг + TTS + пакет).
+    Возвращает строку-статус для лога. Процесс отвязан от GUI — его можно закрыть.
+    Параметры None подтягиваются из сохранённых настроек."""
+    projects = []
+    if selected_projects and isinstance(selected_projects, list) and len(selected_projects) > 0:
+        projects = sorted(selected_projects)
+    elif ab_path and str(ab_path).strip() and not str(ab_path).startswith("<gradio"):
+        projects = [str(ab_path)]
+    else:
+        projects = sorted(get_data_list())
+
+    if not projects:
+        raise gr.Error("No projects selected!")
+
+    # Читаем сохранённые настройки (парсинг + TTS), как в остальном приложении
+    try:
+        fresh_cfg = AppConfig.load_user_settings()
+        ps_ch_size = getattr(fresh_cfg, "ch_size", 200)
+        ps_punctuation = getattr(fresh_cfg, "punctuation", False)
+        ps_translit = getattr(fresh_cfg, "translit", True)
+        ps_sound_effect = getattr(fresh_cfg, "sound_effect", False)
+        saved_spk = getattr(fresh_cfg, "spk_sel", "")
+        saved_rate = getattr(fresh_cfg, "sp_rate", 1.0)
+        saved_back = getattr(fresh_cfg, "back_sound_sel", "")
+        saved_bitrate = getattr(fresh_cfg, "bitrate", 96)
+        saved_noise = getattr(fresh_cfg, "noise_lvl", 10)
+    except Exception:
+        ps_ch_size, ps_punctuation, ps_translit, ps_sound_effect = 200, False, True, False
+        saved_spk, saved_rate, saved_back, saved_bitrate, saved_noise = "", 1.0, "", 96, 10
+
+    # Текущий выбор модели и облачные флаги
+    model_ver = getattr(synth, "ver", None) or 5
+    device = get_device()
+
+    job = {
+        "projects": projects,
+        "parse": {
+            "sound_effect": bool(ps_sound_effect),
+            "punctuation": bool(ps_punctuation),
+            "translit": bool(ps_translit),
+            "ch_size": int(ps_ch_size),
+        },
+        "tts": {
+            "model_ver": int(model_ver),
+            "device": device,
+            "spk_sel": (spk_sel if spk_sel else saved_spk) or "",
+            "sp_rate": float(sp_rate if sp_rate is not None else saved_rate),
+            "back_sound_sel": (back_sound_sel if back_sound_sel else saved_back) or "",
+            "bitrate": int(bitrate if bitrate is not None else saved_bitrate),
+            "noise_lvl": int(noise_lvl if noise_lvl is not None else saved_noise),
+            "use_sound_effect": bool(use_sound_effect) if use_sound_effect is not None else False,
+            "use_accents": bool(use_accents) if use_accents is not None else True,
+            "repl": bool(repl) if repl is not None else True,
+            "use_edge_en": router.USE_EDGE_FOR_ENGLISH,
+            "use_edge_he": router.USE_EDGE_FOR_HEBREW,
+            "use_edge_ru": router.USE_EDGE_FOR_RUSSIAN,
+            "dict_mode": router.DICTIONARY_MODE,
+        },
+        "status_file": str(_bg_status_path()),
+        "log_file": str(_bg_log_path()),
+    }
+
+    job_file = _bg_status_path().with_suffix(".json")
+    try:
+        job_file.parent.mkdir(parents=True, exist_ok=True)
+        job_file.write_text(json.dumps(job, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        raise gr.Error(f"Cannot write job file: {e}")
+
+    # Сбрасываем статус, чтобы GUI не показывал старый
+    try:
+        _bg_status_path().write_text(
+            json.dumps({"state": "starting", "stage": "init", "project": "", "pct": 0,
+                        "message": "Launching...", "error": None, "package_dir": None},
+                       ensure_ascii=False),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+    worker_py = _bg_worker_script()
+    if not worker_py.exists():
+        raise gr.Error(f"Worker script not found: {worker_py}")
+
+    flags = 0
+    if os.name == "nt":
+        # Отвязываем процесс от консоли: переживёт закрытие GUI/браузера
+        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+    try:
+        logf = open(str(_bg_log_path()), "w", encoding="utf-8")
+        subprocess.Popen(
+            [sys.executable, str(worker_py), str(job_file)],
+            stdout=logf,
+            stderr=subprocess.STDOUT,
+            creationflags=flags,
+            cwd=str(Path(__file__).resolve().parent.parent),
+            close_fds=True,
+        )
+    except Exception as e:
+        raise gr.Error(f"Background launch failed: {e}")
+
+    return (
+        f"⚡ Background job started for {len(projects)} project(s): "
+        + ", ".join(projects)
+        + ". You can close the GUI and the browser — processing continues. "
+        "The 3-file package will be saved next to the source and opened in Explorer."
+    )
+
+
+def read_bg_status():
+    """Читает status-файл фонового воркера и возвращает HTML для панели.
+    Полностью crash-proof: никогда не бросает исключение."""
+    status_file = _bg_status_path()
+    if not status_file.exists():
+        return "<div style='color:#94a3b8;font-size:13px;'>Background: no job</div>"
+    try:
+        st = json.loads(status_file.read_text(encoding="utf-8"))
+    except Exception:
+        return "<div style='color:#eab308;font-size:13px;'>Background: reading...</div>"
+    state = st.get("state", "running")
+    pct = st.get("pct", 0)
+    msg = st.get("message", "") or ""
+    project = st.get("project", "") or ""
+    pkg = st.get("package_dir", "") or ""
+    stage = st.get("stage", "") or ""
+
+    if state == "done":
+        color, label = "#10b981", "✅ Background done"
+    elif state == "error":
+        color, label = "#f43f5e", "❌ Background error"
+    else:
+        color, label = "#38bdf8", f"⏳ Background: {stage}"
+    html = f"<div style='color:{color};font-size:13px;'><b>{label}</b> — {pct}%"
+    if project:
+        html += f" | {project}"
+    if msg:
+        html += f"<br><span style='color:#94a3b8;'>{msg[:160]}</span>"
+    if pkg:
+        html += f"<br>📦 {pkg}"
+    html += "</div>"
+    return html
 
 
 # === ПАКЕТНАЯ ОЗВУЧКА ВСЕХ ПРОЕКТОВ ===
@@ -1366,6 +1626,9 @@ def batch_tts_all_projects(
         work_dir = data_path / project
         xml_dir = work_dir / "xml"
         fb2_file = work_dir / f"{project}.fb2"
+
+        # ── THERMAL: check GPU temp before starting each project ──
+        _poll_gpu_temp_thermal()
 
         has_xml = xml_dir.exists() and bool(list(xml_dir.glob("*.xml")))
 
@@ -1735,173 +1998,126 @@ def change_tts_model(mver):
 def tts_tab(ab_path, tts_state):
     with gr.Tab(label="🎧 TTS", id=2) as tts_tab_ui:
         with gr.Row():
-            try:
-                fresh_config = AppConfig.load_user_settings()
-                saved_spk = getattr(fresh_config, "spk_sel", "")
-            except:
-                saved_spk = ""
-            spk_sel = gr.Dropdown(
-                value=saved_spk,
-                label="Select main voice",
-                choices=[saved_spk] if saved_spk else [""],
-                interactive=True,
-            )
-            sp_rate = gr.Slider(
-                0,
-                3,
-                config.sp_rate,
-                step=0.1,
-                label="Set speed",
-                interactive=True,
-            )
-        with gr.Row():
-            back_sound_sel = gr.Dropdown(
-                value=config.back_sound_sel,
-                allow_custom_value=True,
-                label="Select music for table of contents",
-                choices=[""],
-                interactive=True,
-            )
-            bitrate = gr.Slider(
-                24,
-                256,
-                config.bitrate,
-                step=2,
-                label="Set audio bitrate",
-                interactive=True,
-            )
-            noise_lvl = gr.Slider(
-                0,
-                64,
-                config.noise_lvl,
-                step=1,
-                label="Noise level (higher=better)",
-                interactive=True,
-            )
-
-        with gr.Row():
-            with gr.Column(scale=3):
+            # ── LEFT COLUMN: TTS controls, progress, log ──
+            with gr.Column(scale=5, min_width=320):
                 with gr.Row():
-                    use_sound_effect = gr.Checkbox(label="Audio effects", value=False)
-                    repl = gr.Checkbox(
-                        label="Overwrite existing MP3", value=True
+                    try:
+                        fresh_config = AppConfig.load_user_settings()
+                        saved_spk = getattr(fresh_config, "spk_sel", "")
+                    except:
+                        saved_spk = ""
+                    spk_sel = gr.Dropdown(
+                        value=saved_spk,
+                        label="Select main voice",
+                        choices=[saved_spk] if saved_spk else [""],
+                        interactive=True,
                     )
-                    use_accents = gr.Checkbox(
-                        label="Add stress marks (RU)", value=True
+                    sp_rate = gr.Slider(
+                        0, 3, config.sp_rate, step=0.1,
+                        label="Set speed", interactive=True,
                     )
-            with gr.Column(scale=1, min_width=150):
-                tts_button = gr.Button(
-                    "🟢 TTS (Ctrl+Enter)",
-                    elem_id="tts_btn",
-                    variant="primary",
-                    size="sm",
-                )
-                batch_tts_btn = gr.Button(
-                    "📦 Batch TTS (selected)",
-                    variant="primary",
-                    size="sm",
-                    elem_id="batch_tts_btn",
-                )
-                stop_btn = gr.Button("🚫 Stop", variant="stop", size="sm")
-
-        with gr.Row():
-            with gr.Column(scale=1):
-                batch_project_sel = gr.CheckboxGroup(
-                    choices=sorted(get_data_list()),
-                    label="🎯 Select projects for batch TTS (empty = all)",
-                    interactive=True,
-                    elem_id="batch_project_sel",
-                )
                 with gr.Row():
-                    select_all_btn = gr.Button("✅ Select all", size="sm", scale=1)
-                    deselect_all_btn = gr.Button("⬜ Deselect all", size="sm", scale=1)
+                    back_sound_sel = gr.Dropdown(
+                        value=config.back_sound_sel,
+                        allow_custom_value=True,
+                        label="Select music for table of contents",
+                        choices=[""], interactive=True,
+                    )
+                    bitrate = gr.Slider(
+                        24, 256, config.bitrate, step=2,
+                        label="Set audio bitrate", interactive=True,
+                    )
+                    noise_lvl = gr.Slider(
+                        4, 32, config.noise_lvl, step=2,
+                        label="F5-TTS inference steps",
+                        info="Lower = faster, higher = better quality (4-32)",
+                        interactive=True,
+                    )
 
-        metrics_panel = gr.HTML(
-            value=get_metrics_html(0, "00:00", "00:00", "0.0 lines/s")
-        )
-        with gr.Group(elem_id="log_group"):
-            output_log = gr.Textbox(
-                label="Live TTS log",
-                lines=3,
-                max_lines=3,
-                interactive=False,
-                value="Waiting to start...",
-            )
+                with gr.Row():
+                    with gr.Column(scale=3):
+                        with gr.Row():
+                            use_sound_effect = gr.Checkbox(label="Audio effects", value=False)
+                            repl = gr.Checkbox(label="Overwrite existing MP3", value=True)
+                            use_accents = gr.Checkbox(label="Add stress marks (RU)", value=True)
+                    with gr.Column(scale=1, min_width=150):
+                        tts_button = gr.Button("TTS (Ctrl+Enter)", elem_id="tts_btn", variant="primary", size="sm")
+                        batch_tts_btn = gr.Button("Batch TTS (selected)", variant="primary", size="sm", elem_id="batch_tts_btn")
+                        stop_btn = gr.Button("Stop", variant="stop", size="sm")
 
-        with gr.Row():
-            cur_file = gr.State()
-            batch_file_index_state = gr.State({})
+                with gr.Row():
+                    batch_project_sel = gr.CheckboxGroup(
+                        choices=sorted(get_data_list()),
+                        label="Select projects for batch TTS (empty = all)",
+                        interactive=True, elem_id="batch_project_sel",
+                    )
+                with gr.Row():
+                    select_all_btn = gr.Button("Select all", size="sm", scale=1)
+                    deselect_all_btn = gr.Button("Deselect all", size="sm", scale=1)
 
-        # Таблица аудио: узкие колонки + колонка «Модель» (короткое имя)
-        df_output = gr.DataFrame(
-            headers=["File name", "Model", "Size", "Dur.", "Proc."],
-            interactive=False,
-            datatype=["str", "str", "str", "str", "str"],
-            column_widths=["220px", "100px", "70px", "80px", "80px"],
-            type="array",
-            wrap=True,
-        )
-        audio_player = gr.Audio(label="Player", type="filepath", interactive=False, autoplay=False)
-        completion_sound_html = gr.HTML(visible=False)
-
-        # ── Панель управления файлами (объединены логически) ──
-        with gr.Group():
-            with gr.Row(visible=False) as rename_panel:
-                new_name_input = gr.Textbox(label="New file name (without .mp3)", scale=3)
-                rename_btn = gr.Button(
-                    "✏️ Rename",
-                    scale=1,
-                    variant="secondary",
-                    elem_id="rename_file_btn",
+                with gr.Row():
+                    bg_run_btn = gr.Button(
+                        "⚡ Run in background (close GUI OK)",
+                        variant="secondary",
+                        size="sm",
+                        elem_id="bg_run_btn",
+                    )
+                bg_status_html = gr.HTML(
+                    value="<div style='color:#94a3b8;font-size:13px;'>Background: no job</div>"
                 )
+                bg_timer = gr.Timer(2, active=True)
 
-            with gr.Row():
-                del_btn = gr.Button(
-                    "❌ Delete file (Delete)",
+                metrics_panel = gr.HTML(
+                    value=get_metrics_html(0, "00:00", "00:00", "0.0 lines/s")
+                )
+                with gr.Group(elem_id="log_group"):
+                    output_log = gr.Textbox(
+                        label="Live TTS log", lines=3, max_lines=3,
+                        interactive=False, value="Waiting to start...",
+                    )
+
+            # ── RIGHT COLUMN: file table, player, buttons ──
+            with gr.Column(scale=4, min_width=360):
+                cur_file = gr.State()
+                batch_file_index_state = gr.State({})
+
+                df_output = gr.DataFrame(
+                    headers=["File name", "Model", "Size", "Dur.", "Proc."],
                     interactive=False,
-                    elem_id="del_file_btn",
-                    size="sm",
+                    datatype=["str", "str", "str", "str", "str"],
+                    column_widths=["200px", "80px", "60px", "60px", "60px"],
+                    type="array", wrap=True,
                 )
-                row_download_btn = gr.DownloadButton(
-                    "📥 Download file",
-                    value=None,
-                    variant="secondary",
-                    visible=True,
-                    size="sm",
-                )
-                create_arh_btn = gr.Button("📦 Create archive", size="sm")
-                download_btn = gr.DownloadButton(
-                    "📥 Download archive",
-                    value=None,
-                    variant="primary",
-                    visible=False,
-                    size="sm",
-                )
+                audio_player = gr.Audio(label="Player", type="filepath", interactive=False, autoplay=False)
+                completion_sound_html = gr.HTML(visible=False)
 
-            # ── ФИКС B: чекбоксы и массовые операции над файлами ──
-            with gr.Row():
+                # ── File action buttons ──
+                with gr.Row():
+                    del_btn = gr.Button("Delete file (Delete)", elem_id="del_file_btn", variant="stop")
+                    row_download_btn = gr.DownloadButton("Download file", value=None, variant="secondary", visible=True, size="sm")
+                    create_arh_btn = gr.Button("Create archive", size="sm")
+
+                with gr.Row(visible=False) as rename_panel:
+                    new_name_input = gr.Textbox(label="New file name (without .mp3)", scale=3)
+                    rename_btn = gr.Button("Rename", scale=1, variant="secondary", elem_id="rename_file_btn")
+
+                download_btn = gr.DownloadButton("Download archive", value=None, variant="primary", visible=False, size="sm")
+
+                # ── Bulk operations ──
                 file_checkboxes = gr.CheckboxGroup(
-                    choices=[],
-                    label="🎯 Select files for bulk operations",
-                    interactive=True,
-                    elem_id="file_checkboxes",
+                    choices=[], label="Select files for bulk operations",
+                    interactive=True, elem_id="file_checkboxes",
                 )
+                with gr.Row():
+                    sel_all_files_btn = gr.Button("Select all", size="sm", scale=1)
+                    desel_all_files_btn = gr.Button("Deselect all", size="sm", scale=1)
 
-            with gr.Row():
-                sel_all_files_btn = gr.Button("✅ Select all", size="sm", scale=1)
-                desel_all_files_btn = gr.Button("⬜ Deselect all", size="sm", scale=1)
-
-            with gr.Row():
-                dl_selected_btn = gr.Button(
-                    "📦 Download selected (zip)", size="sm", variant="primary"
-                )
+                with gr.Row():
+                    dl_selected_btn = gr.Button("Download selected (zip)", size="sm", variant="primary")
+                    del_selected_btn = gr.Button("Delete selected", size="sm", variant="stop")
                 dl_selected_output = gr.DownloadButton(visible=False, size="sm")
-                del_selected_btn = gr.Button(
-                    "🗑 Delete selected", size="sm", variant="stop"
-                )
 
-            # Состояние подтверждения для массового удаления
-            del_confirm_state = gr.State("idle")
+                del_confirm_state = gr.State("idle")
 
     download_btn.click(
         fn=lambda: gr.DownloadButton(visible=False), outputs=download_btn
@@ -2031,6 +2247,29 @@ def tts_tab(ab_path, tts_state):
     )
 
     stop_btn.click(stop_tts, outputs=output_log, queue=False)
+
+    # ── Фоновый воркер: запуск + живой статус ──
+    bg_run_btn.click(
+        fn=launch_background_job,
+        inputs=[
+            ab_path,
+            spk_sel,
+            sp_rate,
+            back_sound_sel,
+            bitrate,
+            noise_lvl,
+            use_sound_effect,
+            use_accents,
+            repl,
+            batch_project_sel,
+        ],
+        outputs=output_log,
+    ).then(
+        fn=read_bg_status,
+        outputs=bg_status_html,
+    )
+    bg_timer.tick(fn=read_bg_status, outputs=bg_status_html)
+
     del_btn.click(del_file, inputs=[cur_file, ab_path, batch_file_index_state, df_output], outputs=[df_output, batch_file_index_state]).then(
         fn=lambda: gr.update(visible=False), outputs=[rename_panel]
     ).then(

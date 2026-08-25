@@ -418,6 +418,35 @@ def settings_tab(tts_state):
                 outputs=completion_sound_sel,
             )
 
+        with gr.Tab("🧠 F5-TTS Quality", id=46):
+            gr.Markdown(
+                "### F5-TTS Inference Steps\n\n"
+                "Controls how many denoising steps the F5-TTS model performs.\n\n"
+                "- **4–6**: ⚡ Very fast, lower quality — good for testing\n"
+                "- **8–12**: ⚖️ Balanced speed/quality (recommended)\n"
+                "- **16–20**: 🎧 High quality, slower\n"
+                "- **24–32**: 🔬 Maximum quality, slowest\n\n"
+                "This also appears as the **'Inference steps' slider** on the TTS tab."
+            )
+            with gr.Row():
+                f5_nfe_slider = gr.Slider(
+                    4, 32,
+                    value=config.noise_lvl,
+                    step=2,
+                    label="Default inference steps (nfe_step)",
+                    info="Lower = faster synthesis, higher = better audio quality",
+                    interactive=True,
+                )
+
+            def _save_nfe_steps(val):
+                AppConfig.save_user_settings({"noise_lvl": int(val)})
+                gr.Info(f"Default F5-TTS inference steps set to {int(val)}")
+
+            f5_nfe_slider.change(
+                fn=_save_nfe_steps,
+                inputs=f5_nfe_slider,
+            )
+
         s_tabs.select(
             set_tab,
             outputs=tab_index

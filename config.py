@@ -18,14 +18,15 @@ LECTA_REPO_URL = "https://github.com/Flexible78/LECTA"
 TTS_WORKERS = int(os.getenv("LECTA_TTS_WORKERS", "4"))
 
 # Pause between files in batch mode, seconds (0 = disabled).
-TTS_COOLDOWN_SEC = int(os.getenv("LECTA_TTS_COOLDOWN_SEC", "0"))
+TTS_COOLDOWN_SEC = int(os.getenv("LECTA_TTS_COOLDOWN_SEC", "5"))
 
 # Soft GPU temperature threshold, °C. Synthesis pauses when reached.
-TTS_GPU_TEMP_LIMIT_C = int(os.getenv("LECTA_GPU_TEMP_LIMIT", "83"))
+# Lowered from 83 → 80 to prevent GPU crashes / driver resets on hot cards.
+TTS_GPU_TEMP_LIMIT_C = int(os.getenv("LECTA_GPU_TEMP_LIMIT", "80"))
 
 # Temperature to resume synthesis after a cooldown pause, °C.
-# Must be noticeably lower than the limit.
-TTS_GPU_TEMP_RESUME_C = int(os.getenv("LECTA_GPU_TEMP_RESUME", "76"))
+# Must be noticeably lower than the limit. Lowered 76 → 72 accordingly.
+TTS_GPU_TEMP_RESUME_C = int(os.getenv("LECTA_GPU_TEMP_RESUME", "72"))
 
 # GPU power limit in watts. Requires nvidia-smi AND administrator rights,
 # therefore not used by default. Change manually only.
@@ -57,7 +58,7 @@ class AppConfig:
     sp_rate: float = 1
     back_sound_sel: str = ''
     bitrate: int = 96
-    noise_lvl: int = 16
+    noise_lvl: int = 10  # F5-TTS inference steps: 4=fast, 10=balanced, 16=high quality, 32=max
     use_sound_effect: bool = False
     models_path: str = os.getenv("LECTA_MODELS_DIR", "models")
     data_path: str = 'data'

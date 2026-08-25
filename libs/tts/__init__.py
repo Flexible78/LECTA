@@ -2,6 +2,7 @@ import os
 import re
 import torch
 import gc
+import threading
 import numpy as np
 from pathlib import Path
 from libs.utils import download_model, models_path
@@ -78,6 +79,7 @@ class TTSModel:
         self.ver = None
         self.device = torch.device(device)
         self.f5synth = None  # Кэшируем F5Synth чтобы не перезагружать вокодер каждый раз
+        self._f5synth_lock = threading.Lock()  # защита ленивой инициализации F5Synth при параллельном синтезе
 
     def load(self, ver):
         if self.model is not None:
@@ -149,8 +151,11 @@ class TTSModel:
             return np_audio, 48000
         elif self.ver == 5 or self.ver == 6:
             # Кэшируем F5Synth — иначе вокодер перезагружается с диска на каждый вызов!
+            # Двойная проверка под локом: на CPU несколько потоков могут войти одновременно.
             if self.f5synth is None or self.f5synth.model is not self.model:
-                self.f5synth = F5Synth(self.model)
+                with self._f5synth_lock:
+                    if self.f5synth is None or self.f5synth.model is not self.model:
+                        self.f5synth = F5Synth(self.model)
             audio_wave, sample_rate = self.f5synth.synth_audio(
                 text,
                 speaker_id=speaker_id,
