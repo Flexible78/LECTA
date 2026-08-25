@@ -58,6 +58,22 @@ gradio-app, .gradio-container {
   min-width: 0 !important;
   overflow-x: hidden !important;
 }
+/* FIX: app must span the full window width — no dead space on the right */
+gradio-app, .gradio-container,
+.gradio-container .main, .gradio-container .contain,
+.gradio-container > .contain > .wrap, .gradio-container .main > .wrap {
+  width: 100% !important;
+  max-width: 100% !important;
+}
+.gradio-container .contain > .main { flex: 1 1 auto !important; min-width: 0 !important; }
+/* Whatever wrapper Gradio puts next to the sidebar must grow to fill the row */
+.gradio-container .main > *:not(.sidebar):not([class*="sidebar"]),
+.gradio-container .contain > *:not(.sidebar):not([class*="sidebar"]):not(.main) {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  width: 100% !important;
+}
 /* Fix overlay: ensure content area doesn't get obscured */
 .gradio-container .contain > .wrap > .tabs, 
 .gradio-container .contain > .wrap > div {
