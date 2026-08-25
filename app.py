@@ -456,7 +456,7 @@ with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew")
     # ── GPU temperature: auto-refresh every 5 seconds via gr.Timer ──
     gpu_temp_timer = gr.Timer(5, active=True)
     
-    with gr.Sidebar():
+    with gr.Sidebar(open=False):
         tts_sel = gr.Dropdown(value='', allow_custom_value=True, label='Select TTS model', choices=tts_models_list, interactive=True)
         tts_status = gr.Textbox(show_label=False, visible=True, lines=1)
         acc_sel = gr.Dropdown(value='', allow_custom_value=True, label='Stress placement', choices=accent_models_list, interactive=True)
