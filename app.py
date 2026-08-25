@@ -412,10 +412,10 @@ div[data-testid="file-name"], span[data-testid="file-name"], .file-name, .file-p
 /* УБИВАЕМ УРОДЛИВЫЕ СКРОЛЛБАРЫ ИЗ ТЕКСТОВЫХ СТАТУСОВ */
 textarea[readonly] { overflow-y: hidden !important; resize: none !important; }
 
-#tts_btn, #batch_tts_btn, #demo_tts_btn, #fb2_gen_btn { background: linear-gradient(135deg, #3f7ea6 0%, #2b5a78 100%) !important; color: white !important; border: none !important; box-shadow: inset 0px 1px 2px rgba(255, 255, 255, 0.3), 0 4px 10px rgba(63, 126, 166, 0.25) !important; border-radius: 6px !important; }
-#tts_btn:hover, #batch_tts_btn:hover, #demo_tts_btn:hover, #fb2_gen_btn:hover { background: linear-gradient(135deg, #4a8db5 0%, #34688a 100%) !important; }
-#batch_tts_btn { background: linear-gradient(135deg, #c07a45 0%, #a3642f 100%) !important; box-shadow: inset 0px 1px 2px rgba(255, 255, 255, 0.3), 0 4px 10px rgba(192, 122, 69, 0.25) !important; }
-#batch_tts_btn:hover { background: linear-gradient(135deg, #cf8a56 0%, #c07a45 100%) !important; }
+#tts_btn, #batch_tts_btn, #demo_tts_btn, #fb2_gen_btn { background: linear-gradient(135deg, #2096cb 0%, #1a70b0 100%) !important; color: white !important; border: none !important; box-shadow: inset 0px 1px 2px rgba(255, 255, 255, 0.3), 0 4px 10px rgba(32, 150, 203, 0.3) !important; border-radius: 6px !important; }
+#tts_btn:hover, #batch_tts_btn:hover, #demo_tts_btn:hover, #fb2_gen_btn:hover { background: linear-gradient(135deg, #25a8da 0%, #1a70b1 100%) !important; }
+#batch_tts_btn { background: linear-gradient(135deg, #dc762d 0%, #c65e1e 100%) !important; box-shadow: inset 0px 1px 2px rgba(255, 255, 255, 0.3), 0 4px 10px rgba(220, 118, 45, 0.3) !important; }
+#batch_tts_btn:hover { background: linear-gradient(135deg, #e58e49 0%, #dc762d 100%) !important; }
 </style>
 <script>
 document.addEventListener('keydown', function(e) {
@@ -434,14 +434,14 @@ with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew")
     gr.HTML(global_shortcuts, visible=False)
     gr.Markdown(
         "<div id='lecta-header' style='text-align:center; margin:0; padding:0; line-height:1.25;'>"
-        "<h1 style='margin:0; color:#6b9cc4; font-size:20px; line-height:1.2;'>LECTA"
+        "<h1 style='margin:0; color:#52acde; font-size:20px; line-height:1.2;'>LECTA"
         "<span style='color:#8fa3bd; font-size:12px; font-weight:400; margin-left:8px;'>Text-to-Speech for Russian, English and Hebrew</span>"
         "</h1>"
         "<p style='margin:1px 0 0 0; color:#64748b; font-size:11px; line-height:1.3;'>"
         "KATAV writes, LECTA reads. &nbsp;|&nbsp; "
-        "<a href='https://github.com/Flexible78/KATAV' target='_blank' rel='noopener' style='color:#6b9cc4;'>KATAV on GitHub</a>"
+        "<a href='https://github.com/Flexible78/KATAV' target='_blank' rel='noopener' style='color:#52acde;'>KATAV on GitHub</a>"
         "&nbsp;|&nbsp;"
-        "<a href='" + config_module.LECTA_REPO_URL + "' target='_blank' rel='noopener' style='color:#6b9cc4;'>LECTA on GitHub</a>"
+        "<a href='" + config_module.LECTA_REPO_URL + "' target='_blank' rel='noopener' style='color:#52acde;'>LECTA on GitHub</a>"
         "&nbsp;|&nbsp;"
         "Built on <a href='https://gitverse.ru/diger/fb2tts' target='_blank' rel='noopener' style='color:#64748b;'>fb2tts</a> by diger"
         "</p>"

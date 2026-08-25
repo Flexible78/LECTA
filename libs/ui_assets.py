@@ -15,15 +15,15 @@ custom_css = """
   --lecta-border-strong: #475569;
   --lecta-text: #f8fafc;
   --lecta-text-dim: #94a3b8;
-  --lecta-accent: #c07a45;
-  --lecta-accent-2: #a3642f;
-  --lecta-info: #6b9cc4;
-  --lecta-ok: #4f9e80;
-  --lecta-err: #c05e72;
+  --lecta-accent: #dc762d;
+  --lecta-accent-2: #c65e1e;
+  --lecta-info: #52acde;
+  --lecta-ok: #30ac80;
+  --lecta-err: #da4e68;
   --lecta-radius: 12px;
   --lecta-radius-sm: 8px;
   --lecta-shadow: 0 8px 24px rgba(2, 6, 23, 0.45);
-  --lecta-focus: 0 0 0 3px rgba(192, 122, 69, 0.22);
+  --lecta-focus: 0 0 0 3px rgba(220, 118, 45, 0.28);
 }
 
 /* --- App shell --- */
@@ -146,7 +146,7 @@ gradio-app, .gradio-container {
 .tab-nav button.selected {
   color: #0b1120 !important;
   background: linear-gradient(180deg, var(--lecta-accent), var(--lecta-accent-2)) !important;
-  box-shadow: 0 2px 10px rgba(192, 122, 69, 0.18) !important;
+  box-shadow: 0 2px 10px rgba(220, 118, 45, 0.25) !important;
 }
 
 /* --- Cards / blocks --- */
@@ -199,7 +199,7 @@ button.primary, .gr-button-primary {
   border: none !important;
   font-weight: 700 !important;
   border-radius: var(--lecta-radius-sm) !important;
-  box-shadow: 0 4px 14px rgba(192, 122, 69, 0.15) !important;
+  box-shadow: 0 4px 14px rgba(220, 118, 45, 0.22) !important;
 }
 button.secondary, .gr-button-secondary {
   background: var(--lecta-surface-3) !important;
@@ -242,7 +242,7 @@ button:disabled { opacity: 0.5 !important; cursor: not-allowed !important; }
   letter-spacing: 0.06em !important;
 }
 .gr-dataframe tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.02) !important; }
-.gr-dataframe tbody tr:hover { background: rgba(192, 122, 69, 0.07) !important; }
+.gr-dataframe tbody tr:hover { background: rgba(220, 118, 45, 0.08) !important; }
 
 /* --- Sliders and checkboxes --- */
 input[type=range] { accent-color: var(--lecta-accent) !important; }
