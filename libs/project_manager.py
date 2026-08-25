@@ -15,9 +15,9 @@ def remove_dataset(ab_name):
     ab_path = data_path / ab_name
     try:
         if ab_path.exists(): shutil.rmtree(ab_path)
-        gr.Info(f'Проект {ab_name} удален.')
-        logger.info(f'🗑 Проект полностью удален: {ab_name}')
-    except Exception as e: logger.error(f"Ошибка при удалении: {e}")
+        gr.Info(f'Project {ab_name} deleted.')
+        logger.info(f'🗑 Project fully removed: {ab_name}')
+    except Exception as e: logger.error(f"Deletion error: {e}")
     if not data_path.exists(): data_path.mkdir(parents=True, exist_ok=True)
     return {"value": '', "choices": sorted(get_data_list()), "__type__": "update"}, {"visible": False, "__type__": "update"}
 
@@ -25,15 +25,15 @@ def remove_all_datasets():
     try:
         for item in data_path.iterdir():
             if item.is_dir(): shutil.rmtree(item)
-        gr.Info('ВСЕ проекты удалены из папки data.')
-        logger.info('💣 ВСЕ проекты удалены из папки data.')
-    except Exception as e: logger.error(f"Ошибка удаления: {e}")
+        gr.Info('ALL projects removed from the data folder.')
+        logger.info('💣 ALL projects removed from the data folder.')
+    except Exception as e: logger.error(f"Deletion error: {e}")
     if not data_path.exists(): data_path.mkdir(parents=True, exist_ok=True)
     return {"value": '', "choices": sorted(get_data_list()), "__type__": "update"}, {"visible": False, "__type__": "update"}
 
 def create_fb2_file(raw_text, book_title):
     if not raw_text or not raw_text.strip(): return None, gr.update()
-    safe_title = book_title if book_title.strip() else "Озвучка"
+    safe_title = book_title if book_title.strip() else "Audiobook"
     clean_text = raw_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     paragraphs = clean_text.split('\n')
     sections_xml = ""
@@ -61,25 +61,25 @@ def create_fb2_file(raw_text, book_title):
 
     destination_path = ab_path_dir / f"{safe_name}.fb2"
     destination_path.write_text(fb2_template, encoding="utf-8")
-    gr.Info(f"Проект '{safe_name}' сохранен!", duration=4)
+    gr.Info(f"Project '{safe_name}' saved!", duration=4)
     return str(destination_path), refresh_data(safe_name)
 
 def update_existing_fb2(raw_text, book_title):
     if not raw_text or not raw_text.strip(): return None, gr.update(), gr.update()
-    safe_title = book_title if book_title.strip() else "Озвучка"
+    safe_title = book_title if book_title.strip() else "Audiobook"
     safe_name = "".join([c for c in safe_title if c.isalnum() or c in (' ', '_')]).rstrip()
     ab_path_dir = data_path / safe_name
     if ab_path_dir.exists(): shutil.rmtree(ab_path_dir)
     file_path, upd = create_fb2_file(raw_text, book_title)
-    gr.Info(f"Проект '{safe_name}' перезаписан!", duration=4)
+    gr.Info(f"Project '{safe_name}' overwritten!", duration=4)
     return file_path, upd, gr.update(choices=sorted(get_data_list()))
 
 def delete_created_file(book_title):
     if not book_title: return None, refresh_data("")
-    safe_name = "".join([c for c in book_title if c.isalnum() or c in (' ', '_')]).rstrip() or "Озвучка"
+    safe_name = "".join([c for c in book_title if c.isalnum() or c in (' ', '_')]).rstrip() or "Audiobook"
     ab_path_dir = data_path / safe_name
     if ab_path_dir.exists():
         shutil.rmtree(ab_path_dir)
-        gr.Info(f"Проект '{safe_name}' удален!", duration=4)
-        logger.info(f"🗑 Проект удален через Редактор: {safe_name}")
+        gr.Info(f"Project '{safe_name}' deleted!", duration=4)
+        logger.info(f"🗑 Project deleted via Editor: {safe_name}")
     return None, refresh_data("")

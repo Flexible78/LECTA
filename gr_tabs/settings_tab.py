@@ -20,7 +20,7 @@ def save_paths(data_path_input: str, models_path_input: str):
         'data_path': data_path_input,
         'models_path': models_path_input
     })
-    gr.Info("Пути успешно сохранены в user_settings.json")
+    gr.Info("Paths saved successfully to user_settings.json")
     global config
     config = AppConfig.load_user_settings()
     return gr.update(), gr.update()
@@ -42,16 +42,16 @@ def delete_sound(filename, evt: gr.EventData):
         if len(ch_file) == 0:
             file_path = Path(ev_path) / f'{filename}.wav'
             file_path.unlink()
-            gr.Warning(f'Файл {filename} удалён')
+            gr.Warning(f'File {filename} deleted')
             return gr.update(value='', choices=sorted(get_data_list(ev_path, "*.wav")))
         else:
-            gr.Warning(f'Файл {filename} используется')
+            gr.Warning(f'File {filename} is in use')
             return None
     if target.elem_id == 'del_back':
         path_obj = Path(filename)
         file_path = Path(back_path) / path_obj.name
         file_path.unlink()
-        gr.Warning(f'Файл {path_obj.name} удалён')
+        gr.Warning(f'File {path_obj.name} deleted')
         return gr.update(value=get_data_list(back_path, "*.wav"))
 
 def upload_audio(dropbox):
@@ -78,7 +78,7 @@ def add_speaker(speaker_id, ref_name, ref_text, ref_audio, archive_path=models_p
     speaker_id = str(speaker_id)
     speakers_data = torch.load(archive_path, map_location='cpu')
     if speaker_id in speakers_data:
-        gr.Warning(f"Спикер {speaker_id} уже есть! Перезаписываю...")
+        gr.Warning(f"Speaker {speaker_id} already exists! Overwriting...")
     audio, rms, sr = prep_audio(ref_audio)
     speakers_data[speaker_id] = {
         'audio': audio.cpu(),
@@ -91,7 +91,7 @@ def add_speaker(speaker_id, ref_name, ref_text, ref_audio, archive_path=models_p
     }
 
     torch.save(speakers_data, archive_path)
-    gr.Info(f"Спикер {speaker_id} добавлен")
+    gr.Info(f"Speaker {speaker_id} added")
     f5spk.speakers_list()
     return 5
 
@@ -106,7 +106,7 @@ def del_speaker(ref_index):
         return False, False
     del speakers_data[ref_index]
     torch.save(speakers_data, archive_path)
-    gr.Warning(f"Спикер {ref_index} удалён")
+    gr.Warning(f"Speaker {ref_index} deleted")
     return gr.update(samples=[[b, a] for a, b in f5spk.speakers_list()]), 5
 
 def on_excep_select(data, evt: gr.SelectData):
@@ -123,30 +123,30 @@ def exception_action(excp, evt: gr.EventData, excp_w_a=None):
     target = evt.target
     if target.elem_id == 'add_exept':
         sql_db.upsert('cust_dict', {'word': excp, 'transcription': excp_w_a})
-        gr.Info(f"Добавлено исключение: {excp}", duration=4)
+        gr.Info(f"Added exception: {excp}", duration=4)
     elif target.elem_id == 'del_exept':
         sql_db.delete('cust_dict', {'word': excp})
-        gr.Info(f"Удалено исключение: {excp}", duration=4)
+        gr.Info(f"Removed exception: {excp}", duration=4)
     return gr.update(value=sql_db.select('cust_dict', {'word': False, 'transcription': False}))
 
 def abbr_action(abbr, evt: gr.EventData):
     target = evt.target
     if target.elem_id == 'add_abbr':
         sql_db.upsert('exc_abrs', {'abbreviation': abbr})
-        gr.Info(f"Добавлена аббревиатура: {abbr}", duration=4)
+        gr.Info(f"Added abbreviation: {abbr}", duration=4)
     elif target.elem_id == 'del_abbr':
         sql_db.delete('exc_abrs', {'abbreviation': abbr})
-        gr.Info(f"Удалена аббревиатура: {abbr}", duration=4)
+        gr.Info(f"Removed abbreviation: {abbr}", duration=4)
     return gr.update(value=sql_db.select('exc_abrs', {'abbreviation': False}))
 
 def sound_event_action(ev_name, evt: gr.EventData, se_path=''):
     target = evt.target
     if target.elem_id == 'add_ev':
         sql_db.upsert('list_of_snd', {'pattern': ev_name, 'sound_type': se_path})
-        gr.Info(f"Добавлено событие: {ev_name}", duration=4)
+        gr.Info(f"Added event: {ev_name}", duration=4)
     elif target.elem_id == 'del_ev':
         sql_db.delete('list_of_snd', {'pattern': ev_name})
-        gr.Info(f"Удалено событие: {ev_name}", duration=4)
+        gr.Info(f"Removed event: {ev_name}", duration=4)
     return gr.update(value=sql_db.select('list_of_snd', {'pattern': False, 'sound_type': False}))
 
 
@@ -172,26 +172,26 @@ def _save_completion_sound(filename):
     """Сохраняет выбранный звук завершения в user_settings."""
     if filename:
         AppConfig.save_user_settings({"completion_sound": filename})
-        gr.Info(f"Звук завершения: {filename}")
+        gr.Info(f"Completion sound: {filename}")
 
 
 def settings_tab(tts_state):
     tab_index = gr.State(value=0)
     with gr.Tabs() as s_tabs:
-        with gr.Tab("Фоновая музыка", id=40):
+        with gr.Tab("Background music", id=40):
             with gr.Row():
                 with gr.Column():
                     audio_fe = gr.Dataframe(
-                        headers=['Имя файла'],
+                        headers=['File name'],
                         value=get_data_list(back_path, "*.wav"),
                         interactive=False,
                         type='array',
                     )
                 with gr.Column():
                     back_audio_input = gr.Audio(interactive=False, type='filepath', buttons=[])
-                    del_butt = gr.Button("❌ Удалить файл", elem_id='del_back')
+                    del_butt = gr.Button("❌ Delete file", elem_id='del_back')
                     upload_back_file = gr.UploadButton(
-                        "Загрузить фоновую музыку",
+                        "Upload background music",
                         file_count="single",
                         file_types=[".mp3", ".wav"]
                     )
@@ -212,33 +212,33 @@ def settings_tab(tts_state):
                 outputs=[del_butt, back_audio_input]
             )
 
-        with gr.Tab("Словарь исключений", id=41):
+        with gr.Tab("Exceptions dictionary", id=41):
             with gr.Row():
                 with gr.Column():
                     exception_words = gr.Dataframe(
-                        headers=["Исключение", "С ударением"],
+                        headers=["Exception", "With stress"],
                         value=sql_db.select('cust_dict', {'word': False, 'transcription': False}),
                         interactive=False,
                         type='array',
                     )
                     with gr.Row():
-                        excp = gr.Text(show_label=False, placeholder='Исключение', interactive=True)
-                        excp_with_accent = gr.Text(show_label=False, placeholder='С ударением', interactive=True)
+                        excp = gr.Text(show_label=False, placeholder='Exception', interactive=True)
+                        excp_with_accent = gr.Text(show_label=False, placeholder='With stress', interactive=True)
                     with gr.Row():
-                        add_exept_butt = gr.Button("Добавить исключение", elem_id='add_exept')
-                        del_exept_butt = gr.Button("❌ Удалить", elem_id='del_exept')
+                        add_exept_butt = gr.Button("Add exception", elem_id='add_exept')
+                        del_exept_butt = gr.Button("❌ Delete", elem_id='del_exept')
                 with gr.Column():
                     exception_abbrs = gr.Dataframe(
-                        headers=["Аббревиатура"],
+                        headers=["Abbreviation"],
                         value=sql_db.select('exc_abrs', {'abbreviation': False}),
                         interactive=False,
                         type='array',
                     )
                     with gr.Row():
-                        abbr = gr.Text(show_label=False, placeholder='Аббревиатура')
+                        abbr = gr.Text(show_label=False, placeholder='Abbreviation')
                     with gr.Row():
-                        add_abbr_butt = gr.Button("Добавить", elem_id='add_abbr')
-                        del_abbr_butt = gr.Button("❌ Удалить", elem_id='del_abbr')
+                        add_abbr_butt = gr.Button("Add", elem_id='add_abbr')
+                        del_abbr_butt = gr.Button("❌ Delete", elem_id='del_abbr')
 
             exception_words.select(
                 on_excep_select,
@@ -271,11 +271,11 @@ def settings_tab(tts_state):
                 outputs=exception_abbrs
             )
 
-        with gr.Tab("Озвучка событий", id=42):
+        with gr.Tab("Event sounds", id=42):
             with gr.Row():
                 with gr.Column(scale=3):
                     sound_events = gr.Dataframe(
-                        headers=["Описание события", "Звук"],
+                        headers=["Event description", "Sound"],
                         value=sql_db.select('list_of_snd', {'pattern': False, 'sound_type': False}),
                         interactive=False,
                         type='array',
@@ -291,11 +291,11 @@ def settings_tab(tts_state):
                             value=get_data_list(ev_path, "*.wav")[0] if get_data_list(ev_path, "*.wav") else None,
                             interactive=True,
                         )
-                        del_sound_butt = gr.Button("❌ Удалить звук", elem_id='del_ev_sound')
+                        del_sound_butt = gr.Button("❌ Delete sound", elem_id='del_ev_sound')
                     with gr.Row():
-                        ev_name = gr.Text(show_label=False, placeholder='Описание события')
-                        add_ev_butt = gr.Button("Добавить событие", elem_id='add_ev')
-                        del_ev_butt = gr.Button("❌ Удалить событие", elem_id='del_ev')
+                        ev_name = gr.Text(show_label=False, placeholder='Event description')
+                        add_ev_butt = gr.Button("Add event", elem_id='add_ev')
+                        del_ev_butt = gr.Button("❌ Delete event", elem_id='del_ev')
 
             sound_events.select(
                 on_sound_ev_select,
@@ -328,36 +328,36 @@ def settings_tab(tts_state):
                 outputs=se_path
             )
 
-        with gr.Tab("Образцы голосов", id=43):
+        with gr.Tab("Voice samples", id=43):
             with gr.Row():
                 with gr.Column(scale=1):
                     spk_list = gr.Dataset(
                         components=['text', 'text'],
-                        label="Спикеры",
-                        headers=['#', "Название"],
+                        label="Speakers",
+                        headers=['#', "Name"],
                         samples_per_page=15,
                         samples=[[b, a] for a, b in f5spk.speakers_list()],
                     )
                 with gr.Column(scale=3):
                     with gr.Row():
-                        ref_audio = gr.Audio(interactive=True, label='Ваш образец голоса', sources=["upload", "microphone"])
+                        ref_audio = gr.Audio(interactive=True, label='Your voice sample', sources=["upload", "microphone"])
                     with gr.Row():
                         with gr.Column(scale=1):
                             spk_index = gr.Number()
                             ref_name = gr.Textbox(
-                                label='Имя спикера',
+                                label='Speaker name',
                                 lines=1,
                             )
                         with gr.Column(scale=7):
                             ref_text = gr.Textbox(
-                                label='Текст в образце',
+                                label='Text in sample',
                                 lines=2,
-                                placeholder="Введите текст, который звучит в образце",
+                                placeholder="Enter the text spoken in the sample",
                                 interactive=True
                             )
                     with gr.Row():
-                        add_spk_butt = gr.Button("Добавить/изменить спикера")
-                        del_spk_butt = gr.Button("❌ Удалить спикера")
+                        add_spk_butt = gr.Button("Add/edit speaker")
+                        del_spk_butt = gr.Button("❌ Delete speaker")
 
             spk_list.select(
                 get_spk_data,
@@ -377,21 +377,21 @@ def settings_tab(tts_state):
                 outputs=[spk_list,tts_state]
             )
 
-        with gr.Tab("Выбор путей хранения", id=44):
+        with gr.Tab("Storage paths", id=44):
             with gr.Row():
                 data_path_box = gr.Textbox(
                     value=str(config.data_path),
-                    label="Путь к данным (data_path)",
-                    placeholder="Введите путь или выберите папку",
+                    label="Data path (data_path)",
+                    placeholder="Enter a path or select a folder",
                 )
             with gr.Row():
                 models_path_box = gr.Textbox(
                     value=str(config.models_path),
-                    label="Путь к моделям (models_path)",
-                    placeholder="Введите путь или выберите папку",
+                    label="Models path (models_path)",
+                    placeholder="Enter a path or select a folder",
                 )
 
-            save_paths_btn = gr.Button("💾 Сохранить пути")
+            save_paths_btn = gr.Button("💾 Save paths")
 
             save_paths_btn.click(
                 save_paths,
@@ -399,11 +399,11 @@ def settings_tab(tts_state):
                 outputs=[data_path_box, models_path_box]
             )
 
-        with gr.Tab("🔔 Звук завершения", id=45):
+        with gr.Tab("🔔 Completion sound", id=45):
             with gr.Row():
                 completion_sound_sel = gr.Dropdown(
                     value=config.completion_sound,
-                    label="Выберите звук для оповещения о завершении синтеза",
+                    label="Select a sound for synthesis completion notification",
                     choices=_events_sound_choices(),
                     interactive=True,
                 )
@@ -416,6 +416,35 @@ def settings_tab(tts_state):
             s_tabs.select(
                 fn=lambda: _events_sound_choices(),
                 outputs=completion_sound_sel,
+            )
+
+        with gr.Tab("🧠 F5-TTS Quality", id=46):
+            gr.Markdown(
+                "### F5-TTS Inference Steps\n\n"
+                "Controls how many denoising steps the F5-TTS model performs.\n\n"
+                "- **4–6**: ⚡ Very fast, lower quality — good for testing\n"
+                "- **8–12**: ⚖️ Balanced speed/quality (recommended)\n"
+                "- **16–20**: 🎧 High quality, slower\n"
+                "- **24–32**: 🔬 Maximum quality, slowest\n\n"
+                "This also appears as the **'Inference steps' slider** on the TTS tab."
+            )
+            with gr.Row():
+                f5_nfe_slider = gr.Slider(
+                    4, 32,
+                    value=config.noise_lvl,
+                    step=2,
+                    label="Default inference steps (nfe_step)",
+                    info="Lower = faster synthesis, higher = better audio quality",
+                    interactive=True,
+                )
+
+            def _save_nfe_steps(val):
+                AppConfig.save_user_settings({"noise_lvl": int(val)})
+                gr.Info(f"Default F5-TTS inference steps set to {int(val)}")
+
+            f5_nfe_slider.change(
+                fn=_save_nfe_steps,
+                inputs=f5_nfe_slider,
             )
 
         s_tabs.select(

@@ -1,10 +1,23 @@
+import os
+os.environ["GRADIO_LANGUAGE"] = "en"
+
+# ── Фикс UnicodeEncodeError: консоль Windows (cp1251) не умеет эмодзи (🔧☁️✅).
+# Переводим stdout/stderr на UTF-8 с replace, чтобы логи не падали на эмодзи.
+import sys as _sys
+for _stream in (_sys.stdout, _sys.stderr):
+    try:
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 import gradio as gr
 from pathlib import Path
 import shutil
 import re
-import os
 import sys
 import logging
+import inspect
 import numpy as np
 import threading
 import webbrowser
@@ -17,6 +30,7 @@ from libs.accent import accentizer
 from libs.tts import synth, set_tts_device
 from libs.tts_preprocessor import TextParse
 from config import AppConfig
+import config as config_module
 from gr_tabs.parse_tab import parse_tab, get_all_projects_xml
 from gr_tabs.tts_tab import tts_tab
 from gr_tabs.settings_tab import settings_tab
@@ -27,15 +41,18 @@ from libs.russian import normalize_russian
 from libs.document_parser import parse_and_save_document
 from libs.web_scraper import scrape_and_save_article
 from libs.ui_assets import custom_css, custom_head, get_upload_progress_html
+from libs.thermal import get_gpu_temp
 from libs.project_manager import (
     refresh_data, remove_dataset, remove_all_datasets,
     create_fb2_file, update_existing_fb2, delete_created_file
 )
 from libs.system_tools import (
-    clean_tmp_folder, get_installed_models, delete_selected_model,
+    clean_tmp_folder, get_installed_models, get_models_disk_info,
+    delete_selected_model,
     get_voice_models_choices, update_voice_model, update_all_voice_models,
     check_all_voice_models, stop_model_update, quick_check_models_local
 )
+from libs.voice_preview import preview_voice, PREVIEW_PHRASES
 from libs.multilingual_router import process_multilingual_text
 import libs.multilingual_router as router
 from libs.fb2_processor import FB2Processor 
@@ -79,7 +96,7 @@ def global_exception_handler(exc_type, exc_value, exc_traceback):
     if issubclass(exc_type, KeyboardInterrupt):
         sys.__excepthook__(exc_type, exc_value, exc_traceback)
         return
-    logger.error("КРИТИЧЕСКАЯ ОШИБКА:", exc_info=(exc_type, exc_value, exc_traceback))
+    logger.error("CRITICAL ERROR:", exc_info=(exc_type, exc_value, exc_traceback))
 
 sys.excepthook = global_exception_handler
 
@@ -156,25 +173,28 @@ txt_parser = TextParse(False)
 
 def process_url_wrapper(url, remove_ru):
     if not url or not url.strip(): return gr.update(), gr.update()
-    gr.Info("Иду на сайт и вытягиваю текст...", duration=3)
+    gr.Info("Fetching the webpage and extracting text...", duration=3)
     ab_name, error_msg = scrape_and_save_article(url, remove_ru)
     if error_msg:
         gr.Warning(error_msg)
         return gr.update(), gr.update()
-    gr.Info("Статья успешно скачана!", duration=4)
+    gr.Info("Article downloaded successfully!", duration=4)
     return refresh_data(ab_name), refresh_data(ab_name)
 
 def _extract_file_path(file_obj):
-    """Извлекает путь из объекта файла Gradio (строка или объект с .name)"""
+    """Extract path from a Gradio file object (string or object with .name)"""
     if isinstance(file_obj, str):
         return file_obj
     if hasattr(file_obj, 'name'):
         return file_obj.name
     return str(file_obj)
 
-def process_file_wrapper(manual_path, drop_files, remove_ru):
+def process_file_wrapper(manual_path, drop_files, remove_ru, bg_mode=False):
     """ГЕНЕРАТОР: загружает файлы → создаёт FB2 → парсит с прогресс-баром.
-    Каждый yield обновляет: dropdown проектов + прогресс + статус."""
+    Каждый yield обновляет: dropdown проектов + прогресс + статус.
+    Если bg_mode=True — после конвертации в FB2 запускает ПОЛНЫЙ цикл
+    (парсинг + озвучка + пакет из 3 файлов) в фоновом воркере, который
+    переживает закрытие GUI/браузера."""
     # ── Шаг 1: Сбор путей ──
     file_paths = []
     if manual_path and manual_path.strip():
@@ -202,7 +222,7 @@ def process_file_wrapper(manual_path, drop_files, remove_ru):
     errors = []
     for i, fp in enumerate(file_paths, 1):
         fname = Path(fp).name
-        gr.Info(f"[{i}/{len(file_paths)}] Загрузка: {fname}...", duration=2)
+        gr.Info(f"[{i}/{len(file_paths)}] Loading: {fname}...", duration=2)
         ab_name, error_msg = parse_and_save_document(fp, remove_ru)
         if error_msg:
             errors.append(f"{fname}: {error_msg}")
@@ -219,8 +239,19 @@ def process_file_wrapper(manual_path, drop_files, remove_ru):
     total = len(processed)
     drop_update = refresh_data(first_ab)
     
+    # ── Режим «в фоне»: конвертация сделана, дальше всё делает воркер ──
+    if bg_mode:
+        try:
+            from gr_tabs.tts_tab import launch_background_job
+            msg = launch_background_job(None, selected_projects=processed)
+            yield drop_update, drop_update, "", f"🎉 {msg}"
+            return
+        except Exception as e:
+            logger.warning(f"⚠️ Background launch failed, falling back to inline parse: {e}")
+            # fallback — парсим как обычно
+    
     # ── Первый yield: обновляем dropdown + показываем начало прогресса ──
-    yield drop_update, drop_update, get_upload_progress_html(0, 0, total, "Запуск..."), f"📦 Загружено {total} проектов. Начинаю парсинг..."
+    yield drop_update, drop_update, get_upload_progress_html(0, 0, total, "Starting..."), f"📦 Loaded {total} projects. Starting parse..."
     
     # ── Шаг 3: Парсинг каждого проекта с живым прогрессом ──
     # Читаем сохранённые настройки парсинга
@@ -247,26 +278,26 @@ def process_file_wrapper(manual_path, drop_files, remove_ru):
                 yield (
                     gr.update(), gr.update(),
                     get_upload_progress_html(overall_pct, i + 1, total, f"{ab_name}: {msg}"),
-                    f"📄 [{i+1}/{total}] Парсинг: {ab_name} — {msg}"
+                    f"📄 [{i+1}/{total}] Parsing: {ab_name} — {msg}"
                 )
         except Exception as e:
-            logger.warning(f"⚠️ Ошибка авто-парсинга {ab_name}: {e}")
+            logger.warning(f"⚠️ Auto-parse error {ab_name}: {e}")
             yield (
                 gr.update(), gr.update(),
-                get_upload_progress_html(int((i+1)/total*100), i+1, total, f"⚠️ Ошибка: {ab_name}"),
-                f"⚠️ [{i+1}/{total}] Ошибка парсинга {ab_name}: {e}"
+                get_upload_progress_html(int((i+1)/total*100), i+1, total, f"⚠️ Error: {ab_name}"),
+                f"⚠️ [{i+1}/{total}] Parse error {ab_name}: {e}"
             )
     
     # ── Финальный yield: скрываем прогресс-бар ──
-    gr.Info(f"✅ Загружено и распарсено: {total} проектов", duration=5)
+    gr.Info(f"✅ Loaded and parsed: {total} projects", duration=5)
     yield (
         gr.update(), gr.update(),
         "",  # сбрасываем прогресс-бар
-        f"🎉 Все {total} проектов распарсены! Можно переходить к озвучке."
+        f"🎉 All {total} projects parsed! Ready for TTS."
     )
 
 def clean_srt_timings(text):
-    """Очищает текст от таймкодов SRT файлов (для подготовки словарей)"""
+    """Clean SRT timecodes from text (for dictionary preparation)"""
     if not text: return text
     # Удаляем таймкоды 00:00:19,560 --> 00:00:21,570
     text = re.sub(r'\d{2}:\d{2}:\d{2}[,\.]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[,\.]\d{3}', '', text)
@@ -283,7 +314,7 @@ def toggle_tab_parse(ab_path): return gr.Tabs(visible=True, selected=1), ab_path
 def put_accents(string): return accentizer.process_accent(string, r'\+\w+|\w+\+\w+')
 
 def text_to_audio(string, spk, rate=1, noise=None, pitch=None, ref_audio=None, ref_text=''):
-    if not synth: return gr.update(label = "Модель не загружена!")
+    if not synth: return gr.update(label = "Model not loaded!")
     def safe_synth(t, disable_norm=False):
         txt = t if disable_norm else txt_parser.garbage(normalize_russian(t))
         res = synth.synth_audio(txt, spk, rate, noise, ref_audio, ref_text)
@@ -308,38 +339,38 @@ def text_to_audio(string, spk, rate=1, noise=None, pitch=None, ref_audio=None, r
             np_audio = (np_audio * 32767).astype(np.int16)
         return (sr, np_audio)
     except Exception as e:
-        logger.error(f"Ошибка маршрутизатора: {e}", exc_info=True)
+        logger.error(f"Router error: {e}", exc_info=True)
         return None
 
 def rename_project_folder(old_name, new_name):
     if not old_name or not new_name: return gr.update(), gr.update(), gr.update(visible=False)
     safe_new_name = "".join([c for c in new_name if c.isalnum() or c in (' ', '_', '-')]).rstrip()
     if not safe_new_name: 
-        gr.Warning("Недопустимое имя проекта!")
+        gr.Warning("Invalid project name!")
         return gr.update(), gr.update(), gr.update(visible=False)
     old_dir = data_path / old_name
     new_dir = data_path / safe_new_name
     if not old_dir.exists():
-        gr.Warning(f"Проект {old_name} не найден!")
+        gr.Warning(f"Project {old_name} not found!")
         return gr.update(), gr.update(), gr.update(visible=False)
     if new_dir.exists():
-        gr.Warning(f"Проект с именем {safe_new_name} уже существует!")
+        gr.Warning(f"Project named {safe_new_name} already exists!")
         return gr.update(), gr.update(), gr.update()
     try:
         old_dir.rename(new_dir)
-        gr.Info(f"Проект переименован в {safe_new_name}")
+        gr.Info(f"Project renamed to {safe_new_name}")
         new_choices = sorted(get_data_list())
         return gr.update(choices=new_choices, value=safe_new_name), gr.update(choices=new_choices, value=safe_new_name), gr.update(visible=False)
     except Exception as e:
-        logger.error(f"Ошибка переименования: {e}", exc_info=True)
-        gr.Warning(f"Ошибка: {e}")
+        logger.error(f"Rename error: {e}", exc_info=True)
+        gr.Warning(f"Error: {e}")
         return gr.update(), gr.update(), gr.update(visible=False)
 
 tts_models_list = [
-    ('Vosk 0.10 (dev. 56 голосов)', 2),
-    ('Silero v5_5 (5 голосов)', 3), ('Silero v5_cis (60 голосов)', 4),
+    ('Vosk 0.10 (dev. 56 voices)', 2),
+    ('Silero v5_5 (5 voices)', 3), ('Silero v5_cis (60 voices)', 4),
     ('Misha24-10 (F5-TTS)', 5), ('ESpeech-TTS (F5-TTS)', 6),
-    ('Silero English v3 (Английский)', 7),
+    ('Silero English v3 (English)', 7),
 ]
 accent_models_list = [('RuAccent', 1), ('Silero stress', 2)]
 
@@ -364,11 +395,11 @@ def load_existing_fb2(ab_name):
         if not paras: raw_text = re.sub(r'<[^>]+>', '', content).strip()
         else: raw_text = "\n".join(paras).replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
         return ab_name, raw_text
-    except Exception as e: return ab_name, f"Ошибка: {e}"
+    except Exception as e: return ab_name, f"Error: {e}"
 
 global_shortcuts = """
 <style>
-.gradio-container { max-width: 98% !important; padding: 10px !important; }
+.gradio-container { max-width: 100% !important; padding: 12px !important; }
 .form { border-radius: 8px !important; box-shadow: none !important; }
 div[data-testid="file-name"], span[data-testid="file-name"], .file-name, .file-preview {
     white-space: pre-wrap !important; word-break: break-all !important; overflow-wrap: break-word !important; overflow: visible !important; font-size: 13px !important; line-height: 1.2 !important;
@@ -381,10 +412,10 @@ div[data-testid="file-name"], span[data-testid="file-name"], .file-name, .file-p
 /* УБИВАЕМ УРОДЛИВЫЕ СКРОЛЛБАРЫ ИЗ ТЕКСТОВЫХ СТАТУСОВ */
 textarea[readonly] { overflow-y: hidden !important; resize: none !important; }
 
-#tts_btn, #batch_tts_btn, #demo_tts_btn, #fb2_gen_btn { background: linear-gradient(135deg, #00aff0 0%, #005a9e 100%) !important; color: white !important; border: none !important; box-shadow: inset 0px 1px 2px rgba(255, 255, 255, 0.5), 0 4px 10px rgba(0, 175, 240, 0.4) !important; border-radius: 6px !important; }
-#tts_btn:hover, #batch_tts_btn:hover, #demo_tts_btn:hover, #fb2_gen_btn:hover { background: linear-gradient(135deg, #00c3ff 0%, #0078d7 100%) !important; }
-#batch_tts_btn { background: linear-gradient(135deg, #f97316 0%, #ea580c 100%) !important; box-shadow: inset 0px 1px 2px rgba(255, 255, 255, 0.5), 0 4px 10px rgba(249, 115, 22, 0.4) !important; }
-#batch_tts_btn:hover { background: linear-gradient(135deg, #fb923c 0%, #f97316 100%) !important; }
+#tts_btn, #batch_tts_btn, #demo_tts_btn, #fb2_gen_btn { background: linear-gradient(135deg, #2096cb 0%, #1a70b0 100%) !important; color: white !important; border: none !important; box-shadow: inset 0px 1px 2px rgba(255, 255, 255, 0.3), 0 4px 10px rgba(32, 150, 203, 0.3) !important; border-radius: 6px !important; }
+#tts_btn:hover, #batch_tts_btn:hover, #demo_tts_btn:hover, #fb2_gen_btn:hover { background: linear-gradient(135deg, #25a8da 0%, #1a70b1 100%) !important; }
+#batch_tts_btn { background: linear-gradient(135deg, #dc762d 0%, #c65e1e 100%) !important; box-shadow: inset 0px 1px 2px rgba(255, 255, 255, 0.3), 0 4px 10px rgba(220, 118, 45, 0.3) !important; }
+#batch_tts_btn:hover { background: linear-gradient(135deg, #e58e49 0%, #dc762d 100%) !important; }
 </style>
 <script>
 document.addEventListener('keydown', function(e) {
@@ -399,17 +430,36 @@ document.addEventListener('keydown', function(e) {
 </script>
 """
 
-with gr.Blocks(title="FB2 to Speech (Enterprise Edition) 🇷🇺") as App:
+with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew") as App:
     gr.HTML(global_shortcuts, visible=False)
+    gr.Markdown(
+        "<div id='lecta-header' style='text-align:center; margin:0; padding:0; line-height:1.25;'>"
+        "<h1 style='margin:0; color:#52acde; font-size:20px; line-height:1.2;'>LECTA"
+        "<span style='color:#8fa3bd; font-size:12px; font-weight:400; margin-left:8px;'>Text-to-Speech for Russian, English and Hebrew</span>"
+        "</h1>"
+        "<p style='margin:1px 0 0 0; color:#64748b; font-size:11px; line-height:1.3;'>"
+        "KATAV writes, LECTA reads. &nbsp;|&nbsp; "
+        "<a href='https://github.com/Flexible78/KATAV' target='_blank' rel='noopener' style='color:#52acde;'>KATAV on GitHub</a>"
+        "&nbsp;|&nbsp;"
+        "<a href='" + config_module.LECTA_REPO_URL + "' target='_blank' rel='noopener' style='color:#52acde;'>LECTA on GitHub</a>"
+        "&nbsp;|&nbsp;"
+        "Built on <a href='https://gitverse.ru/diger/fb2tts' target='_blank' rel='noopener' style='color:#64748b;'>fb2tts</a> by diger"
+        "</p>"
+        "</div>",
+        elem_id="lecta-header"
+    )
     
     tts_state = gr.State()
     acc_state = gr.State()
     ab_state = gr.State()
+
+    # ── GPU temperature: auto-refresh every 5 seconds via gr.Timer ──
+    gpu_temp_timer = gr.Timer(5, active=True)
     
     with gr.Sidebar():
-        tts_sel = gr.Dropdown(value='', allow_custom_value=True, label='Выбрать модель TTS', choices=tts_models_list, interactive=True)
+        tts_sel = gr.Dropdown(value='', allow_custom_value=True, label='Select TTS model', choices=tts_models_list, interactive=True)
         tts_status = gr.Textbox(show_label=False, visible=True, lines=1)
-        acc_sel = gr.Dropdown(value='', allow_custom_value=True, label='Расстановка ударений', choices=accent_models_list, interactive=True)
+        acc_sel = gr.Dropdown(value='', allow_custom_value=True, label='Stress placement', choices=accent_models_list, interactive=True)
         acc_status = gr.Textbox(show_label=False, visible=True, lines=1)
 
         gr.Markdown("---")
@@ -417,67 +467,85 @@ with gr.Blocks(title="FB2 to Speech (Enterprise Edition) 🇷🇺") as App:
             device_radio = gr.Radio(
                 choices=["auto", "cpu"],
                 value="auto",
-                label="🖥 Устройство вычисления",
-                info="auto = GPU (быстро, 6ГБ VRAM) | cpu = ОЗУ (медленнее, но не грузит видеокарту)",
+                label="🖥 Compute device",
+                info="auto = GPU (fast, 6GB VRAM) | cpu = RAM (slower, but does not load the GPU)",
                 interactive=True
             )
         
+        with gr.Row():
+            eco_btn = gr.Button("♻ ECO (quiet / cool)", size="sm", elem_id="eco_btn",
+                variant="secondary")
+        
         gr.Markdown("---")
-        fast_ru_cb = gr.Checkbox(label="⚡ Русский через облако (Edge TTS)", value=router.USE_EDGE_FOR_RUSSIAN, info="Мгновенная скорость! Нужен интернет. Голос: Дмитрий")
-        fast_eng_cb = gr.Checkbox(label="⚡ Английский через облако", value=router.USE_EDGE_FOR_ENGLISH, info="Быстрая генерация через Microsoft Edge")
-        
-        # ДОБАВЛЕН ИВРИТ ЧЕРЕЗ ОБЛАКО
-        fast_heb_cb = gr.Checkbox(label="⚡ Иврит через облако", value=router.USE_EDGE_FOR_HEBREW, info="Microsoft Edge TTS (рекомендуется — локальный TTS не поддерживает иврит)")
-        
-        dict_mode_cb = gr.Checkbox(label="📚 Режим словаря (длинные паузы)", value=router.DICTIONARY_MODE, info="Вдох 1 сек. между языками")
+        gpu_temp_display = gr.HTML(value="<div style='padding:8px 12px; border-radius:8px; background:#1e293b; border:1px solid #334155; text-align:center;'><span style='color:#94a3b8; font-size:13px;'>GPU: checking...</span></div>", elem_id="gpu_temp_display")
         
         gr.Markdown("---")
         with gr.Row():
-            restart_btn = gr.Button("🔄 Перезапуск", variant="primary")
-            quit_btn = gr.Button("🚪 Выход", variant="stop")
+            preview_voice_btn = gr.Button("▶ Preview voice", size="sm", elem_id="preview_voice_btn")
+        preview_audio = gr.Audio(label="Voice preview", type="filepath", interactive=False, autoplay=True, visible=False)
+        preview_status = gr.Markdown("")
+        
+        gr.Markdown("---")
+        fast_ru_cb = gr.Checkbox(label="⚡ Russian via cloud (Edge TTS)", value=router.USE_EDGE_FOR_RUSSIAN, info="Instant speed! Requires internet. Voice: Dmitry")
+        fast_eng_cb = gr.Checkbox(label="⚡ English via cloud", value=router.USE_EDGE_FOR_ENGLISH, info="Fast generation via Microsoft Edge")
+        
+        # ДОБАВЛЕН ИВРИТ ЧЕРЕЗ ОБЛАКО
+        fast_heb_cb = gr.Checkbox(label="⚡ Hebrew via cloud", value=router.USE_EDGE_FOR_HEBREW, info="Microsoft Edge TTS (recommended — local TTS does not support Hebrew)")
+        
+        dict_mode_cb = gr.Checkbox(label="📚 Dictionary mode (long pauses)", value=router.DICTIONARY_MODE, info="1 sec breath between languages")
+        
+        gr.Markdown("---")
+        with gr.Row():
+            restart_btn = gr.Button("🔄 Restart", variant="primary")
+            quit_btn = gr.Button("🚪 Quit", variant="stop")
         
         def restart_app(): os._exit(42)
         def stop_app(): os._exit(0)
         
-        js_restart = "function(){ document.body.innerHTML = '<h1 style=\"color:#38bdf8; text-align:center; margin-top:20%; font-family:sans-serif;\">🔄 Перезапуск сервера...<br>Пожалуйста, подождите.</h1>'; setTimeout(() => location.reload(), 2000); }"
-        js_exit = "function(){ document.body.innerHTML = '<h1 style=\"color:#f8fafc; text-align:center; margin-top:20%; font-family:sans-serif;\">Сервер остановлен 🛑<br><br>Вкладку можно закрыть.</h1>'; setTimeout(() => { window.open('', '_self', ''); window.close(); }, 500); }"
+        js_restart = "function(){ document.body.innerHTML = '<h1 style=\"color:#38bdf8; text-align:center; margin-top:20%; font-family:sans-serif;\">🔄 Restarting server...<br>Please wait.</h1>'; setTimeout(() => location.reload(), 2000); }"
+        js_exit = "function(){ document.body.innerHTML = '<h1 style=\"color:#f8fafc; text-align:center; margin-top:20%; font-family:sans-serif;\">Server stopped 🛑<br><br>You can close this tab.</h1>'; setTimeout(() => { window.open('', '_self', ''); window.close(); }, 500); }"
 
     with gr.Tabs() as project_tabs:
-        with gr.Tab("📁 Менеджер Проектов", id="fb2tts") as fb2tts_tab:
-            with gr.Row(visible=False): remove_ru_cb = gr.Checkbox(label="Очистить от русского текста", value=False)
+        with gr.Tab("📁 Project Manager", id="fb2tts") as fb2tts_tab:
+            with gr.Row(visible=False): remove_ru_cb = gr.Checkbox(label="Remove Russian text", value=False)
             
             with gr.Row(elem_classes=["uniform-row"]):
                 with gr.Column(scale=5):
-                    ab_path = gr.Dropdown(value='', label="Выбор проекта", allow_custom_value=True, choices=get_data_list(), interactive=True)
+                    ab_path = gr.Dropdown(value='', label="Select project", allow_custom_value=True, choices=get_data_list(), interactive=True)
                 with gr.Column(scale=3):
                     with gr.Row():
-                        show_rename_btn = gr.Button("✏️ Переименовать", elem_id="show_rename_btn", elem_classes=["fixed-height-btn"])
-                        rm_dataset = gr.Button("❌ Удалить", variant="secondary", elem_classes=["fixed-height-btn"])
-                        rm_all_dataset = gr.Button("💣 Удалить ВСЕ", variant="stop", elem_classes=["fixed-height-btn"])
+                        show_rename_btn = gr.Button("✏️ Rename", elem_id="show_rename_btn", elem_classes=["fixed-height-btn"])
+                        rm_dataset = gr.Button("❌ Delete", variant="secondary", elem_classes=["fixed-height-btn"])
+                        rm_all_dataset = gr.Button("💣 Delete ALL", variant="stop", elem_classes=["fixed-height-btn"])
             
             with gr.Row():
                 with gr.Column(scale=1):
-                    with gr.Group():
+                    with gr.Group(elem_classes="block-card"):
                         with gr.Row(elem_classes=["uniform-row"]):
-                            paste_file_btn = gr.Button("📋 Из буфера", variant="primary", elem_classes=["fixed-height-btn"], scale=1)
-                            manual_file_input = gr.Textbox(label="Путь к файлам (по одному на строку)", lines=2, scale=4, placeholder="C:\\books\\book1.fb2\nC:\\books\\book2.pdf")
-                        upload_text_file = gr.File(label="Или перетащи файлы сюда: PDF, DOCX, EPUB, RTF, HTML, FB2...", file_count="multiple", height=100)
-                        process_file_btn = gr.Button("⬇️ Загрузить файл(ы)", variant="primary")
+                            paste_file_btn = gr.Button("📋 From clipboard", variant="primary", elem_classes=["fixed-height-btn"], scale=1)
+                            manual_file_input = gr.Textbox(label="File paths (one per line)", lines=2, scale=4, placeholder="C:\\books\\book1.fb2\nC:\\books\\book2.pdf")
+                        upload_text_file = gr.File(label="Or drag files here: PDF, DOCX, EPUB, RTF, HTML, FB2, ZIP...", file_count="multiple", height=100)
+                        bg_mode_cb = gr.Checkbox(
+                            label="⚡ Background mode (parse + TTS + 3-file package, close GUI OK)",
+                            value=False,
+                            interactive=True,
+                        )
+                        process_file_btn = gr.Button("⬇️ Upload file(s)", variant="primary")
                 
                 with gr.Column(scale=1):
-                    with gr.Group():
+                    with gr.Group(elem_classes="block-card"):
                         with gr.Row(elem_classes=["uniform-row"]):
-                            paste_url_btn = gr.Button("📋 Из буфера", variant="primary", elem_classes=["fixed-height-btn"], scale=1)
-                            url_input = gr.Textbox(label="🌐 Или ссылка на статью", lines=1, scale=4)
-                        url_btn = gr.Button("⬇️ Скачать статью", variant="primary")
+                            paste_url_btn = gr.Button("📋 From clipboard", variant="primary", elem_classes=["fixed-height-btn"], scale=1)
+                            url_input = gr.Textbox(label="🌐 Or article URL", lines=1, scale=4)
+                        url_btn = gr.Button("⬇️ Download article", variant="primary")
             
             with gr.Row():
                 upload_progress_html = gr.HTML(value="", visible=True)
-                upload_status_text = gr.Textbox(label="Статус загрузки", lines=1, interactive=False, visible=True)
+                upload_status_text = gr.Textbox(label="Upload status", lines=1, interactive=False, visible=True)
             
             with gr.Row(visible=False) as rename_proj_panel:
-                new_proj_name = gr.Textbox(label="Введите новое имя проекта", scale=4)
-                confirm_rename_btn = gr.Button("💾 Сохранить новое имя", scale=1, variant="primary")
+                new_proj_name = gr.Textbox(label="Enter new project name", scale=4)
+                confirm_rename_btn = gr.Button("💾 Save new name", scale=1, variant="primary")
                 
             with gr.Tabs(visible=False) as inner_tabs:
                 cover_tab(ab_path, ab_state)
@@ -485,25 +553,25 @@ with gr.Blocks(title="FB2 to Speech (Enterprise Edition) 🇷🇺") as App:
                 vocab_tab(ab_path, file_content_box)
                 tts_tab(ab_path, tts_state)
 
-        with gr.Tab("📝 Создать FB2 / Редактор"):
-            gr.Markdown("### ✨ Создать новый проект или отредактировать существующий")
+        with gr.Tab("📝 Create FB2 / Editor"):
+            gr.Markdown("### ✨ Create a new project or edit an existing one")
             
             with gr.Row():
                 with gr.Column(scale=2):
                     with gr.Group():
-                        gr.Markdown("#### 📥 Загрузить существующий")
+                        gr.Markdown("#### 📥 Load existing")
                         load_project_dropdown = gr.Dropdown(
-                            label="Выберите проект",
+                            label="Select project",
                             choices=get_data_list(),
                             interactive=True,
-                            info="Загрузит FB2-файл проекта в редактор ниже"
+                            info="Will load the project's FB2 file into the editor below"
                         )
                 
                 with gr.Column(scale=1):
                     with gr.Group():
-                        gr.Markdown("#### 🗑 Удалить")
+                        gr.Markdown("#### 🗑 Delete")
                         fb2_delete_btn = gr.Button(
-                            "🗑 Удалить проект (Delete)",
+                            "🗑 Delete project (Delete)",
                             variant="stop",
                             elem_id="del_file_btn",
                             elem_classes=["fixed-height-btn"]
@@ -514,97 +582,105 @@ with gr.Blocks(title="FB2 to Speech (Enterprise Edition) 🇷🇺") as App:
             with gr.Row():
                 with gr.Column(scale=4):
                     fb2_title_input = gr.Textbox(
-                        label="📛 Название проекта",
-                        value="МояОзвучка",
-                        placeholder="Введите название (используется как имя папки и файла)"
+                        label="📛 Project name",
+                        value="MyAudiobook",
+                        placeholder="Enter a name (used as folder and file name)"
                     )
                     fb2_text_input = gr.Textbox(
-                        label="📝 Текст (строки через Enter = новые абзацы)",
+                        label="📝 Text (Enter-separated lines = new paragraphs)",
                         lines=14,
-                        placeholder="Вставьте текст сюда...\nКаждая строка станет отдельным абзацем в FB2.\n\nТакже можно вставить SRT-субтитры и очистить их кнопкой ниже."
+                        placeholder="Paste text here...\nEach line becomes a separate paragraph in FB2.\n\nYou can also paste SRT subtitles and clean them with the button below."
                     )
                 
                 with gr.Column(scale=1, min_width=200):
                     with gr.Group():
-                        gr.Markdown("#### ⚡ Действия")
+                        gr.Markdown("#### ⚡ Actions")
                         fb2_generate_btn = gr.Button(
-                            "✨ Сохранить (Ctrl+Enter)",
+                            "✨ Save (Ctrl+Enter)",
                             variant="primary",
                             elem_id="fb2_gen_btn",
                             elem_classes=["fixed-height-btn"]
                         )
                         fb2_update_btn = gr.Button(
-                            "🔄 Перезаписать",
+                            "🔄 Overwrite",
                             variant="secondary",
                             elem_classes=["fixed-height-btn"]
                         )
                         clean_srt_btn = gr.Button(
-                            "✂️ Очистить SRT (таймкоды)",
+                            "✂️ Clean SRT (timecodes)",
                             variant="secondary",
                             elem_classes=["fixed-height-btn"]
                         )
                     
                     with gr.Group():
-                        gr.Markdown("#### 📦 Результат")
-                        fb2_file_output = gr.File(label="Скачать FB2", height=80)
+                        gr.Markdown("#### 📦 Result")
+                        fb2_file_output = gr.File(label="Download FB2", height=80)
                         editor_status = gr.Textbox(
-                            label="Статус",
+                            label="Status",
                             lines=2,
                             interactive=False,
-                            placeholder="Здесь появится результат операции..."
+                            placeholder="The operation result will appear here..."
                         )
 
         with gr.Tab(label="🎙️ Demo TTS"):
             with gr.Group(visible=False) as f5_gr:
                 with gr.Row(): 
-                    ref_audio = gr.Audio(label='Ваш образец голоса', elem_classes="small-audio")
+                    ref_audio = gr.Audio(label='Your voice sample', elem_classes="small-audio")
                 with gr.Row(): 
-                    ref_text = gr.Textbox(label='Текст в образце', lines=1, placeholder="Введите текст, который звучит в образце", interactive=True)
+                    ref_text = gr.Textbox(label='Text in sample', lines=1, placeholder="Enter the text spoken in the sample", interactive=True)
             with gr.Row():
-                spk_sel = gr.Dropdown(value='', label='Выбрать голос', choices=[''], interactive=True)
-                speech_rate = gr.Slider(0, 3, 1, step=0.1, label="Задать скорость", interactive=True)
-                noise_lvl = gr.Slider(0, 64, 16, step=1, label="Уровень шума", interactive=True)
-                pitch_sel = gr.Slider(0, 100, 50, step=1, label="Тембр", interactive=True)
+                spk_sel = gr.Dropdown(value='', label='Select voice', choices=[''], interactive=True)
+                speech_rate = gr.Slider(0, 3, 1, step=0.1, label="Set speed", interactive=True)
+                noise_lvl = gr.Slider(4, 32, 10, step=2, label="F5-TTS steps (lower=faster)", interactive=True)
+                pitch_sel = gr.Slider(0, 100, 50, step=1, label="Pitch", interactive=True)
             with gr.Row():
-                text_input = gr.Textbox(label='Текст', lines=2, placeholder="English | עברית | Русский", interactive=True, max_length=220)
+                text_input = gr.Textbox(label='Text', lines=2, placeholder="English | עברית | Russian", interactive=True, max_length=220)
                 audio_output = gr.Audio(interactive=False, buttons=[])
             with gr.Row():
-                accent_button = gr.Button("Проставить ударения", interactive=False, elem_classes=["fixed-height-btn"])
-                tts_button = gr.Button("Преобразовать в речь (Ctrl+Enter)", interactive=False, elem_id="demo_tts_btn", elem_classes=["fixed-height-btn"])
+                accent_button = gr.Button("Add stress marks", interactive=False, elem_classes=["fixed-height-btn"])
+                tts_button = gr.Button("Convert to speech (Ctrl+Enter)", interactive=False, elem_id="demo_tts_btn", elem_classes=["fixed-height-btn"])
 
-        with gr.Tab("🛠️ Система и Очистка") as system_tab:
+        with gr.Tab("🛠️ System & Cleanup") as system_tab:
             with gr.Row():
                 with gr.Column(scale=1):
-                    clean_tmp_btn = gr.Button("🧹 Очистить папку tmp", variant="primary")
-                    tmp_status = gr.Textbox(label="Результат", interactive=False, lines=1)
+                    clean_tmp_btn = gr.Button("🧹 Clean tmp folder", variant="primary")
+                    tmp_status = gr.Textbox(label="Result", interactive=False, lines=1)
                 with gr.Column(scale=1):
-                    model_to_del = gr.Dropdown(choices=get_installed_models(), label="Удалить модель")
-                    del_model_btn = gr.Button("❌ Удалить", variant="stop")
-                    model_del_status = gr.Textbox(label="Результат", interactive=False, lines=1)
+                    model_to_del = gr.Dropdown(choices=get_installed_models(), label="Delete model")
+                    with gr.Row():
+                        confirm_del_cb = gr.Checkbox(label="I understand this deletes files from disk", value=False, scale=2)
+                        del_model_btn = gr.Button("🗑 Delete model", variant="stop", scale=1)
+                    model_del_status = gr.Textbox(label="Result", interactive=False, lines=1)
+                    disk_space_display = gr.Textbox(label="Disk space", interactive=False, lines=1, value=get_models_disk_info()[0])
             gr.Markdown("---")
             with gr.Row():
                 with gr.Column(scale=2):
-                    gr.Markdown("### 🔄 Обновление / скачивание голосовых моделей")
+                    gr.Markdown("### 🔄 Update / download voice models")
                     voice_model_sel = gr.Dropdown(
                         choices=get_voice_models_choices(),
-                        label="Выбрать модель для обновления",
+                        label="Select model to update",
                         allow_custom_value=True,
                         interactive=True
                     )
                     with gr.Row():
-                        update_one_model_btn = gr.Button("⬇️ Обновить выбранную", variant="primary")
-                        update_all_models_btn = gr.Button("⬇️⬇️ Обновить ВСЕ модели", variant="secondary")
+                        update_one_model_btn = gr.Button("⬇️ Update selected", variant="primary")
+                        update_all_models_btn = gr.Button("⬇️⬇️ Update ALL models", variant="secondary")
                     with gr.Row():
-                        check_models_btn = gr.Button("🔍 Проверить актуальность", variant="secondary")
-                        stop_model_btn = gr.Button("🛑 Прервать", variant="stop")
+                        check_models_btn = gr.Button("🔍 Check for updates", variant="secondary")
+                        stop_model_btn = gr.Button("🛑 Abort", variant="stop")
+                    with gr.Row():
+                        update_del_model = gr.Dropdown(choices=get_installed_models(), label="Delete model", scale=2)
+                        update_del_confirm_cb = gr.Checkbox(label="I understand this deletes files from disk", value=False, scale=2)
+                        update_del_btn = gr.Button("🗑 Delete", variant="stop", scale=1)
+                    update_del_status = gr.Textbox(label="Result", interactive=False, lines=1)
                 with gr.Column(scale=3):
                     voice_model_status = gr.Textbox(
-                        label="Статус обновления моделей",
+                        label="Model update status",
                         interactive=False, lines=10,
-                        placeholder="Выберите модель и нажмите «Обновить»..."
+                        placeholder="Select a model and click 'Update'..."
                     )
 
-        with gr.Tab("⚙️ Настройки"):
+        with gr.Tab("⚙️ Settings"):
             settings_tab(tts_state)
 
     # ==============================================================================
@@ -623,6 +699,51 @@ with gr.Blocks(title="FB2 to Speech (Enterprise Edition) 🇷🇺") as App:
     def set_dict_mode(val):
         router.DICTIONARY_MODE = val
         AppConfig.save_user_settings({'dict_mode': val})
+    
+    def eco_preset():
+        """Apply ECO mode: reduce workers, add cooldown, lower temp limit."""
+        import config as cfg
+        import gr_tabs.tts_tab as ttab
+        cfg.TTS_COOLDOWN_SEC = 15
+        cfg.TTS_GPU_TEMP_LIMIT_C = 78
+        cfg.TTS_GPU_TEMP_RESUME_C = 70
+        # Recreate semaphore with 2 permits
+        try:
+            new_sema = threading.Semaphore(2)
+            ttab._tts_sema = new_sema
+        except Exception:
+            pass
+        return "♻ ECO mode: 2 workers, cooldown 15 s, temp limit 78°C"
+    
+    def read_gpu_temp_display():
+        """Return a formatted HTML string showing GPU temperature with colour-coding.
+        Fully crash-proof: never raises, always returns valid HTML."""
+        try:
+            from config import TTS_GPU_TEMP_LIMIT_C
+            t = get_gpu_temp()
+        except Exception:
+            t = None
+        try:
+            limit = TTS_GPU_TEMP_LIMIT_C
+        except NameError:
+            limit = 80
+        if t is None:
+            return "<div style='padding:8px 12px; border-radius:8px; background:#1e293b; border:1px solid #334155; text-align:center;'><span style='color:#94a3b8; font-size:13px;'>GPU: N/A</span></div>"
+        if t >= limit:
+            color = "#f43f5e"; label = "HOT"
+        elif t >= 75:
+            color = "#f97316"; label = "Warm"
+        elif t >= 55:
+            color = "#eab308"; label = "Load"
+        else:
+            color = "#10b981"; label = "Cool"
+        return f"<div style='padding:8px 12px; border-radius:8px; background:#1e293b; border:1px solid #334155; text-align:center;'><span style='color:{color}; font-size:14px; font-weight:700;'>GPU {label}: {t}C</span></div>"
+    
+    def preview_voice_handler(tts_model_val, spk):
+        """Handler for preview voice button."""
+        if not tts_model_val:
+            return "⚠️ Select a TTS model first", gr.update(visible=False)
+        return preview_voice(tts_model_val, spk)
         
     device_radio.change(fn=set_tts_device, inputs=device_radio, outputs=tts_status)
     fast_ru_cb.change(set_fast_russian, inputs=fast_ru_cb, outputs=[])
@@ -630,8 +751,17 @@ with gr.Blocks(title="FB2 to Speech (Enterprise Edition) 🇷🇺") as App:
     fast_heb_cb.change(set_fast_hebrew, inputs=fast_heb_cb, outputs=[])
     dict_mode_cb.change(set_dict_mode, inputs=dict_mode_cb, outputs=[])
 
-    tts_sel.select(tts_model_load, inputs=tts_sel, outputs=[tts_state, tts_status], show_progress_on=tts_status)
-    acc_sel.select(acc_model_load, inputs=acc_sel, outputs=[acc_state, acc_status], show_progress_on=acc_status)
+    eco_btn.click(fn=eco_preset, outputs=tts_status)
+    gpu_temp_timer.tick(fn=read_gpu_temp_display, outputs=gpu_temp_display)
+
+    preview_voice_btn.click(
+        fn=preview_voice_handler,
+        inputs=[tts_sel, spk_sel],
+        outputs=[preview_status, preview_audio]
+    )
+
+    tts_sel.select(tts_model_load, inputs=tts_sel, outputs=[tts_state, tts_status])
+    acc_sel.select(acc_model_load, inputs=acc_sel, outputs=[acc_state, acc_status])
     restart_btn.click(fn=restart_app, js=js_restart)
     quit_btn.click(fn=stop_app, js=js_exit)
 
@@ -640,7 +770,7 @@ with gr.Blocks(title="FB2 to Speech (Enterprise Edition) 🇷🇺") as App:
 
     process_file_btn.click(
         fn=process_file_wrapper, 
-        inputs=[manual_file_input, upload_text_file, remove_ru_cb], 
+        inputs=[manual_file_input, upload_text_file, remove_ru_cb, bg_mode_cb], 
         outputs=[ab_path, load_project_dropdown, upload_progress_html, upload_status_text]
     ).then(toggle_tab_parse, inputs=ab_path, outputs=[inner_tabs, ab_state]
     ).then(get_all_projects_xml, inputs=ab_path, outputs=parse_df_output)
@@ -663,27 +793,27 @@ with gr.Blocks(title="FB2 to Speech (Enterprise Edition) 🇷🇺") as App:
     )
 
     load_project_dropdown.change(
-        fn=lambda name: (*load_existing_fb2(name), f"📂 Загружен: {name}" if name else ""),
+        fn=lambda name: (*load_existing_fb2(name), f"📂 Loaded: {name}" if name else ""),
         inputs=[load_project_dropdown],
         outputs=[fb2_title_input, fb2_text_input, editor_status]
     )
     clean_srt_btn.click(
-        fn=lambda t: (clean_srt_timings(t), "✂️ Таймкоды SRT удалены"),
+        fn=lambda t: (clean_srt_timings(t), "✂️ SRT timecodes removed"),
         inputs=fb2_text_input,
         outputs=[fb2_text_input, editor_status]
     )
     fb2_generate_btn.click(
-        fn=lambda r, b: (*create_fb2_file(r, b), gr.update(choices=sorted(get_data_list())), f"✨ Проект '{b}' создан и сохранён!"),
+        fn=lambda r, b: (*create_fb2_file(r, b), gr.update(choices=sorted(get_data_list())), f"✨ Project '{b}' created and saved!"),
         inputs=[fb2_text_input, fb2_title_input],
         outputs=[fb2_file_output, ab_path, load_project_dropdown, editor_status]
     )
     fb2_update_btn.click(
-        fn=lambda r, b: (*update_existing_fb2(r, b), f"🔄 Проект '{b}' перезаписан!"),
+        fn=lambda r, b: (*update_existing_fb2(r, b), f"🔄 Project '{b}' overwritten!"),
         inputs=[fb2_text_input, fb2_title_input],
         outputs=[fb2_file_output, ab_path, load_project_dropdown, editor_status]
     )
     fb2_delete_btn.click(
-        fn=lambda b: (*delete_created_file(b), f"🗑 Проект удалён" if b else "⚠️ Нечего удалять"),
+        fn=lambda b: (*delete_created_file(b), f"🗑 Project deleted" if b else "⚠️ Nothing to delete"),
         inputs=[fb2_title_input],
         outputs=[fb2_file_output, ab_path, editor_status]
     )
@@ -694,29 +824,134 @@ with gr.Blocks(title="FB2 to Speech (Enterprise Edition) 🇷🇺") as App:
     acc_state.change(change_acc_model, inputs=acc_state, outputs=accent_button)
 
     clean_tmp_btn.click(fn=clean_tmp_folder, outputs=tmp_status)
-    del_model_btn.click(fn=delete_selected_model, inputs=model_to_del, outputs=[model_to_del, model_del_status])
+    
+    # Delete model handlers — reuse the same function with confirmation
+    del_model_btn.click(
+        fn=delete_selected_model,
+        inputs=[model_to_del, confirm_del_cb, tts_state, acc_state],
+        outputs=[model_to_del, model_del_status, disk_space_display, voice_model_sel, update_del_model]
+    )
+    
+    # Duplicate delete button inside the Update section (reuses same handler)
+    update_del_btn.click(
+        fn=delete_selected_model,
+        inputs=[update_del_model, update_del_confirm_cb, tts_state, acc_state],
+        outputs=[update_del_model, update_del_status, disk_space_display, voice_model_sel, model_to_del]
+    )
     update_one_model_btn.click(fn=lambda mid: update_voice_model(mid)[0], inputs=voice_model_sel, outputs=voice_model_status)
     update_all_models_btn.click(fn=update_all_voice_models, outputs=voice_model_status)
     check_models_btn.click(fn=check_all_voice_models, outputs=voice_model_status)
     stop_model_btn.click(fn=stop_model_update, outputs=voice_model_status, queue=False)
-    # Авто-проверка моделей при открытии вкладки «Система и Очистка»
-    system_tab.select(fn=quick_check_models_local, outputs=voice_model_status)
+    # Refresh disk info and model lists when opening the System tab
+    def _refresh_system_tab():
+        models = get_installed_models()
+        voices = get_voice_models_choices()
+        return (quick_check_models_local(), get_models_disk_info()[0], models, models, voices)
+    system_tab.select(
+        fn=_refresh_system_tab,
+        outputs=[voice_model_status, disk_space_display, model_to_del, update_del_model, voice_model_sel]
+    )
+
+def _check_port_lecta(port: int) -> bool:
+    """Return True if *port* is free; otherwise log the owner and decide."""
+    if os.name != "nt":
+        return True
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             f"(Get-NetTCPConnection -LocalPort {port} -ErrorAction SilentlyContinue).OwningProcess"],
+            capture_output=True, text=True, timeout=5,
+            creationflags=0x08000000,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            return True
+        for line in result.stdout.strip().splitlines():
+            pid_str = line.strip()
+            if pid_str and pid_str.isdigit():
+                pid = int(pid_str)
+                try:
+                    info = subprocess.run(
+                        ["powershell", "-NoProfile", "-Command",
+                         f"(Get-Process -Id {pid} -ErrorAction SilentlyContinue | Select-Object ProcessName -ExpandProperty ProcessName)"],
+                        capture_output=True, text=True, timeout=5,
+                        creationflags=0x08000000,
+                    )
+                    image = info.stdout.strip() or "unknown"
+                except Exception:
+                    image = "unknown"
+                logger.info("[PORT] %d busy, owner PID %d (%s)", port, pid, image)
+                # If it's an old LECTA instance, kill it
+                if image.lower() in ("python.exe", "pythonw.exe"):
+                    try:
+                        cmdline_result = subprocess.run(
+                            ["powershell", "-NoProfile", "-Command",
+                             f"(Get-CimInstance Win32_Process -Filter \"ProcessId={pid}\").CommandLine"],
+                            capture_output=True, text=True, timeout=5,
+                            creationflags=0x08000000,
+                        )
+                        cmdline = cmdline_result.stdout.strip()
+                        if "app.py" in cmdline or "fb2tts" in cmdline:
+                            logger.info("[PORT] Killing old LECTA instance (PID %d)", pid)
+                            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                                           capture_output=True, timeout=10,
+                                           creationflags=0x08000000)
+                    except Exception:
+                        pass
+                else:
+                    logger.error("[PORT] %d held by foreign process %s (PID %d). Stop it or use LECTA_PORT env var.",
+                                  port, image, pid)
+                    return False
+    except Exception as e:
+        logger.debug("[PORT] check skipped: %s", e)
+    return True
 
 if __name__ == "__main__":
     sound_dir = CURRENT_DIR / "sound"
     if not data_path.exists(): data_path.mkdir(parents=True, exist_ok=True)
     port = app_config.port if app_config.port else 7860
+
+    if not _check_port_lecta(port):
+        print(f"[PORT] {port} is held by another application. Set LECTA_PORT env var to use a different port.")
+        sys.exit(1)
+
     threading.Timer(1.5, lambda: webbrowser.open(f"http://127.0.0.1:{port}")).start()
-    
-    App.queue().launch(
-        server_name="127.0.0.1",
-        server_port=app_config.port,
-        share=app_config.share,
-        debug=app_config.debug,
-        inbrowser=False, 
-        allowed_paths=[str(sound_dir), str(data_path), str(CURRENT_DIR / "libs")], 
-        favicon_path='libs/at_favicon.ico',
-        css=custom_css,
-        head=custom_head,
-        theme=gr.themes.Base(neutral_hue="slate")
-    )
+
+    launch_kwargs = {
+        "server_name": "127.0.0.1",
+        "server_port": port,
+        "share": app_config.share,
+        "debug": app_config.debug,
+        "inbrowser": False,
+        "show_api": False,
+        "allowed_paths": [str(sound_dir), str(data_path), str(CURRENT_DIR / "libs")],
+        "css": custom_css,
+        "head": custom_head,
+        "theme": gr.themes.Soft(
+            primary_hue="sky",
+            neutral_hue="slate",
+            radius_size=gr.themes.sizes.radius_lg,
+            spacing_size=gr.themes.sizes.spacing_md,
+            font=[gr.themes.GoogleFont("Inter"), "ui-sans-serif", "system-ui", "sans-serif"],
+        ),
+    }
+
+    favicon = CURRENT_DIR / "libs" / "favicon" / "lecta.ico"
+    if favicon.is_file():
+        launch_kwargs["favicon_path"] = str(favicon)
+
+    # Gradio 6 removed/moved several launch() parameters (show_api, favicon_path,
+    # analytics_enabled...). Keep only what the installed version really accepts
+    # instead of guessing from the docs.
+    allowed = set(inspect.signature(App.launch).parameters)
+    dropped = sorted(k for k in launch_kwargs if k not in allowed)
+    if dropped:
+        logger.info("[LAUNCH] Gradio %s ignores: %s", gr.__version__, ", ".join(dropped))
+    launch_kwargs = {k: v for k, v in launch_kwargs.items() if k in allowed}
+
+    logger.info("[LAUNCH] Starting on http://127.0.0.1:%d", port)
+    try:
+        App.queue().launch(**launch_kwargs)
+    except OSError as e:
+        logger.error("[PORT] Could not bind %d: %s", port, e)
+        print(f"[PORT] {port} is not available. Free it, or set LECTA_PORT env var to use a different port.")
+        sys.exit(1)

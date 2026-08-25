@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 import torchaudio
+import threading
 from pathlib import Path
 from libs.utils import download_model, models_path
 from vocos import Vocos
@@ -98,12 +99,13 @@ class F5Synth:
     def __init__(self, model):
         self.model = model
         self.vocoder = None
+        self._vocoder_lock = threading.Lock()  # защита ленивой загрузки вокодера
 
     def generate_audio(
         self,
         gen_text: str,
         ref_data,
-        nfe_step: int = 16,
+        nfe_step: int = 10,
         cfg_strength: float = 2.0,
         sway_sampling_coef: float = -1.0,
         speed: float = 0.9,
@@ -179,9 +181,17 @@ class F5Synth:
         except Exception as e:
             return(f"Ошибка: {type(e).__name__}: {e}")
 
-    def synth_audio(self, text, speaker_id=None, speed=1.0, noise=16, ref_audio=None, ref_text=''):
+    def synth_audio(self, text, speaker_id=None, speed=1.0, noise=None, ref_audio=None, ref_text=''):
+        if noise is None:
+            try:
+                from config import config
+                noise = getattr(config, 'noise_lvl', 10)
+            except Exception:
+                noise = 10
         if self.vocoder is None:
-            self.load_vocoder()
+            with self._vocoder_lock:
+                if self.vocoder is None:
+                    self.load_vocoder()
 
         data = {}
         if ref_audio is None:

@@ -1,10 +1,27 @@
+import os
+import re
 import torch
 import gc
+import threading
 import numpy as np
 from pathlib import Path
 from libs.utils import download_model, models_path
 from libs.tts.vosk_backend import Model, Synth
 from libs.tts.f5_backend import F5Model, F5Synth
+
+def _model_not_found_hint():
+    """English guidance shown when model files are missing."""
+    try:
+        resolved = str(models_path)
+    except Exception:
+        resolved = os.getenv("LECTA_MODELS_DIR", "models")
+    return (
+        "\n\nModel files not found. To resolve this:\n"
+        "  1) Set LECTA_MODELS_DIR to the folder containing your voice models "
+        f"(current resolved path: '{resolved}'),\n"
+        "  2) Check the models_path value in the settings file,\n"
+        "  3) Or place the 'models' folder next to the LECTA application."
+    )
 
 # ── КАРТА КОРОТКИХ ИМЁН МОДЕЛЕЙ (для отображения в таблице аудио) ──
 # Используется tts_tab.py при сохранении и показе MP3.
@@ -36,10 +53,25 @@ def set_tts_device(mode):
     """Устанавливает режим устройства: 'auto' (GPU) или 'cpu' (RAM)."""
     global _tts_device_mode
     _tts_device_mode = mode
-    return f"{'🎮 GPU (CUDA)' if mode != 'cpu' else '💾 CPU (RAM)'} режим активирован"
+    return f"{'GPU (CUDA)' if mode != 'cpu' else 'CPU (RAM)'} mode activated"
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 now_dir = Path.cwd()
+
+# --- STRESS MARKS ---
+# "+" is an internal stress mark and must NEVER be pronounced.
+# It is stripped for every engine (Silero, Vosk, F5); only a real
+# math sign between digits is preserved.
+STRESS_AWARE_VERS = ()
+
+
+def strip_stress_marks(text):
+    if not text:
+        return text
+    text = re.sub(r"(?<=\d)\s*\+\s*(?=\d)", "<<PLUS>>", str(text))
+    text = text.replace("+", "")
+    return text.replace("<<PLUS>>", "+")
+
 
 class TTSModel:
     def __init__(self):
@@ -47,6 +79,7 @@ class TTSModel:
         self.ver = None
         self.device = torch.device(device)
         self.f5synth = None  # Кэшируем F5Synth чтобы не перезагружать вокодер каждый раз
+        self._f5synth_lock = threading.Lock()  # защита ленивой инициализации F5Synth при параллельном синтезе
 
     def load(self, ver):
         if self.model is not None:
@@ -63,9 +96,11 @@ class TTSModel:
             model_ver = '0.10'
             try:
                 self.model = Model(model_ver)
-                return ver, "Модель успешно загружена!"
+                return ver, "Model loaded successfully!"
             except Exception as e:
-                return None, f"Ошибка инициализации: {e}"
+                if isinstance(e, FileNotFoundError) or "No such file" in str(e):
+                    return None, f"Failed to load model: {e}.{_model_not_found_hint()}"
+                return None, f"Initialization error: {e}"
         elif ver in [3, 4, 7]:
             # Обновляем устройство при каждой загрузке (пользователь мог переключить GPU/CPU)
             self.device = torch.device(get_device())
@@ -83,7 +118,7 @@ class TTSModel:
             model_path = model_dir / model_name
             if not model_path.is_file():
                 model_dir.mkdir(exist_ok=True)
-                print(f'Загрузка Silero TTS ({lang})...')
+                print(f'Loading Silero TTS ({lang})...')
                 model_url = f"https://models.silero.ai/models/tts/{lang}/{model_name}"
                 m, status = download_model(model_url, model_path)
                 if m is None:
@@ -92,18 +127,23 @@ class TTSModel:
                 package = torch.package.PackageImporter(str(model_path))
                 self.model = package.load_pickle("tts_models", "model")
                 self.model.to(self.device)
-                return ver, "Модель успешно загружена!"
+                return ver, "Model loaded successfully!"
             except Exception as e:
-                return None, f"Ошибка загрузки модели: {e}"
+                if isinstance(e, FileNotFoundError) or "No such file" in str(e):
+                    return None, f"Failed to load model: {e}.{_model_not_found_hint()}"
+                return None, f"Model loading error: {e}"
         else:
             try:
                 self.model = F5Model()
                 self.model.load(model_ver=ver)
-                return ver, "Модель успешно загружена!"
+                return ver, "Model loaded successfully!"
             except Exception as e:
-                return None, f"Ошибка инициализации: {e}"
+                if isinstance(e, FileNotFoundError) or "No such file" in str(e):
+                    return None, f"Failed to load model: {e}.{_model_not_found_hint()}"
+                return None, f"Initialization error: {e}"
     
     def synth_audio(self, text, speaker_id, speed=1, noise=16, ref_audio=None, ref_text=''):
+        text = strip_stress_marks(text)  # "+" is never read aloud
         if self.ver in [3, 4, 7]:
             np_audio = self.model.apply_tts(text, speaker=speaker_id, sample_rate=48000)
             np_audio = np_audio.detach().numpy()
@@ -111,8 +151,11 @@ class TTSModel:
             return np_audio, 48000
         elif self.ver == 5 or self.ver == 6:
             # Кэшируем F5Synth — иначе вокодер перезагружается с диска на каждый вызов!
+            # Двойная проверка под локом: на CPU несколько потоков могут войти одновременно.
             if self.f5synth is None or self.f5synth.model is not self.model:
-                self.f5synth = F5Synth(self.model)
+                with self._f5synth_lock:
+                    if self.f5synth is None or self.f5synth.model is not self.model:
+                        self.f5synth = F5Synth(self.model)
             audio_wave, sample_rate = self.f5synth.synth_audio(
                 text,
                 speaker_id=speaker_id,

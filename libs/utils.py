@@ -86,7 +86,7 @@ def download_model(model_url, target_path):
         else:
             if target_path.exists():
                 target_path.unlink()
-            return None, "Error: Размер неверный!"
+            return None, "Error: File size mismatch!"
 
     except Exception as e:
         if target_path.exists():

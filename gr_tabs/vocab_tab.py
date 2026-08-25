@@ -15,18 +15,18 @@ stop_vocab = False
 def stop_vocab_fn():
     global stop_vocab
     stop_vocab = True
-    logger.info("🛑 Сигнал остановки парсера словаря...")
+    logger.info("🛑 Vocabulary parser stop signal...")
 
 def clean_api_errors(text):
     """Очищает готовый словарь от строк с ошибками 'HTTPSConnectionPool'"""
     if not text: return text
     lines = text.split('\n')
-    clean_lines = [line for line in lines if "Ошибка перевода: HTTPSConnectionPool" not in line and "[Ошибка перевода" not in line]
+    clean_lines = [line for line in lines if "Translation error: HTTPSConnectionPool" not in line and "[Translation error" not in line]
     return "\n".join(clean_lines)
 
 def save_vocab_project(content, current_project):
-    if not content or "⚠️" in content or "Начинаем" in content:
-        return "⚠️ Нет данных для сохранения.", []
+    if not content or "⚠️" in content or "Starting" in content:
+        return "⚠️ No data to save.", []
         
     try:
         if current_project and not str(current_project).startswith('<gradio'):
@@ -56,7 +56,7 @@ def save_vocab_project(content, current_project):
         files_created.append(str(txt_file))
         
         # 2. XML (Для озвучки)
-        xml_content = f'<speak autor="Словарь" album="{project_name}">\n  <break time="30"/>\n'
+        xml_content = f'<speak autor="Dictionary" album="{project_name}">\n  <break time="30"/>\n'
         for line in content.split('\n'):
             if line.strip() and not line.startswith('[🛑'):
                 clean_line = line.replace('\t', ' , ')
@@ -91,34 +91,34 @@ def save_vocab_project(content, current_project):
             
             # 5. MD (Markdown)
             md_file = proj_dir / f"Vocab_{vocab_filename}.md"
-            md_content = f"# Словарный проект: {project_name}\n\n| Исходник | Перевод |\n|---|---|\n"
+            md_content = f"# Vocabulary project: {project_name}\n\n| Source | Translation |\n|---|---|\n"
             for row in struct_data: md_content += f"| {row['Word']} | {row['Translation']} |\n"
             md_file.write_text(md_content, encoding='utf-8')
             files_created.append(str(md_file))
         
-        return f"✅ Сохранены файлы ({len(files_created)} шт.) в проект '{project_name}'", files_created
+        return f"✅ Saved files ({len(files_created)} items) to project '{project_name}'", files_created
     except Exception as e:
-        return f"❌ Ошибка сохранения: {e}", []
+        return f"❌ Save error: {e}", []
 
 def extract_and_translate(text, src_langs_ui, tgt_langs_ui, min_length, include_context, tts_format, current_project):
     global stop_vocab
     stop_vocab = False
     
     if not text.strip():
-        yield "⚠️ Вставьте текст статьи!", get_vocab_metrics_html(0, "00:00", "00:00", "0.0 сл/с", "Ошибка"), "⚠️ Пустой текст", []
+        yield "⚠️ Paste article text!", get_vocab_metrics_html(0, "00:00", "00:00", "0.0 w/s", "Error"), "⚠️ Empty text", []
         return
         
     if not src_langs_ui or not tgt_langs_ui:
-        yield "⚠️ Выберите языки!", get_vocab_metrics_html(0, "00:00", "00:00", "0.0 сл/с", "Ошибка"), "⚠️ Языки не выбраны", []
+        yield "⚠️ Select languages!", get_vocab_metrics_html(0, "00:00", "00:00", "0.0 w/s", "Error"), "⚠️ No languages selected", []
         return
         
-    yield "⏳ Подготовка...", get_vocab_metrics_html(0, "00:00", "00:00", "0.0 сл/с", "Сбор слов..."), "⏳ Сбор слов...", []
+    yield "⏳ Preparing...", get_vocab_metrics_html(0, "00:00", "00:00", "0.0 w/s", "Collecting words..."), "⏳ Collecting words...", []
     
     clean_text = re.sub(r'<[^>]+>', ' ', text)
     clean_sent_text = clean_text.replace('\n', ' ')
     sentences = re.split(r'(?<=[.!?])\s+', clean_sent_text)
     
-    lang_codes = {"Английский (en)": "en", "Иврит (he)": "iw", "Русский (ru)": "ru"}
+    lang_codes = {"English (en)": "en", "Hebrew (he)": "iw", "Russian (ru)": "ru"}
     src_langs = [lang_codes[l] for l in src_langs_ui]
     tgt_langs = [lang_codes[l] for l in tgt_langs_ui]
         
@@ -136,7 +136,7 @@ def extract_and_translate(text, src_langs_ui, tgt_langs_ui, min_length, include_
     total_words = len(sorted_words)
     
     if not sorted_words:
-        yield "⚠️ Слов не найдено.", get_vocab_metrics_html(0, "00:00", "00:00", "0.0 сл/с", "Ошибка"), "⚠️ Слов не найдено", []
+        yield "⚠️ No words found.", get_vocab_metrics_html(0, "00:00", "00:00", "0.0 w/s", "Error"), "⚠️ No words found", []
         return
         
     translators = {lang: GoogleTranslator(source='auto', target=lang) for lang in tgt_langs}
@@ -146,7 +146,7 @@ def extract_and_translate(text, src_langs_ui, tgt_langs_ui, min_length, include_
     
     for i, word in enumerate(sorted_words):
         if stop_vocab:
-            results.append("\n[🛑 Парсинг прерван пользователем]")
+            results.append("\n[🛑 Parsing interrupted by user]")
             break
             
         try:
@@ -178,8 +178,8 @@ def extract_and_translate(text, src_langs_ui, tgt_langs_ui, min_length, include_
                 results.append(res_str)
                 
         except Exception as e:
-            logger.error(f"Ошибка перевода: {e}")
-            results.append(f"{word} — [Ошибка перевода: {e}]")
+            logger.error(f"Translation error: {e}")
+            results.append(f"{word} — [Translation error: {e}]")
             
         if i % 3 == 0 or i == total_words - 1:
             elapsed = time.time() - start_time
@@ -187,53 +187,53 @@ def extract_and_translate(text, src_langs_ui, tgt_langs_ui, min_length, include_
             rem_sec = (total_words - (i + 1)) / speed if speed > 0 else 0
             pct = int(((i + 1) / total_words) * 100)
             
-            html = get_vocab_metrics_html(pct, format_time_hms(elapsed), format_time_hms(rem_sec), f"{speed:.1f} сл/с", "Перевод...")
-            yield "\n".join(results), html, f"⏳ Переведено {i+1} из {total_words}", []
+            html = get_vocab_metrics_html(pct, format_time_hms(elapsed), format_time_hms(rem_sec), f"{speed:.1f} w/s", "Translating...")
+            yield "\n".join(results), html, f"⏳ Translated {i+1} of {total_words}", []
             
     # АВТОСОХРАНЕНИЕ 
     final_text = "\n".join(results)
     save_msg, saved_files = save_vocab_project(final_text, current_project)
     
-    status_prefix = "🛑 Прервано" if stop_vocab else "✅ Завершено"
+    status_prefix = "🛑 Interrupted" if stop_vocab else "✅ Completed"
     pct_final = int(((i + 1) / total_words) * 100) if stop_vocab else 100
-    final_html = get_vocab_metrics_html(pct_final, format_time_hms(time.time() - start_time), "00:00", f"{speed:.1f} сл/с", status_prefix)
+    final_html = get_vocab_metrics_html(pct_final, format_time_hms(time.time() - start_time), "00:00", f"{speed:.1f} w/s", status_prefix)
     
     yield final_text, final_html, f"{status_prefix}\n{save_msg}", saved_files
 
 def vocab_tab(ab_path_box=None, file_content_box=None):
     if ab_path_box is None: ab_path_box = gr.State("")
         
-    with gr.Tab("📚 Парсер Словаря") as vocab_tab_elem:
-        gr.Markdown("### 🧠 Мульти-Экстрактор словарных слов")
+    with gr.Tab("📚 Vocabulary Parser") as vocab_tab_elem:
+        gr.Markdown("### 🧠 Multi-Extractor for vocabulary words")
         
         with gr.Row():
             with gr.Column(scale=2):
-                input_text = gr.Textbox(label="Исходный текст", lines=15, max_lines=20)
+                input_text = gr.Textbox(label="Source text", lines=15, max_lines=20)
             with gr.Column(scale=1):
-                src_langs = gr.CheckboxGroup(["Английский (en)", "Иврит (he)", "Русский (ru)"], label="Языки ИСХОДНИКА", value=["Английский (en)"])
-                tgt_langs = gr.CheckboxGroup(["Русский (ru)", "Английский (en)", "Иврит (he)"], label="Языки ПЕРЕВОДА", value=["Русский (ru)", "Иврит (he)"])
-                min_len = gr.Slider(minimum=1, maximum=15, value=4, step=1, label="Минимальная длина слова")
+                src_langs = gr.CheckboxGroup(["English (en)", "Hebrew (he)", "Russian (ru)"], label="SOURCE languages", value=["English (en)"])
+                tgt_langs = gr.CheckboxGroup(["Russian (ru)", "English (en)", "Hebrew (he)"], label="TARGET languages", value=["Russian (ru)", "Hebrew (he)"])
+                min_len = gr.Slider(minimum=1, maximum=15, value=4, step=1, label="Minimum word length")
                 
                 with gr.Group():
-                    include_context = gr.Checkbox(label="📖 Добавлять контекст (предложения)", value=True)
-                    tts_format = gr.Checkbox(label="🎧 Формат для озвучки", value=True)
+                    include_context = gr.Checkbox(label="📖 Add context (sentences)", value=True)
+                    tts_format = gr.Checkbox(label="🎧 TTS format", value=True)
                 
                 with gr.Row(elem_classes=["uniform-row"]):
-                    parse_btn = gr.Button("▶ Старт", variant="primary", elem_classes=["fixed-height-btn"])
-                    stop_btn = gr.Button("🛑 Стоп (Автосохранение)", variant="stop", elem_classes=["fixed-height-btn"])
+                    parse_btn = gr.Button("▶ Start", variant="primary", elem_classes=["fixed-height-btn"])
+                    stop_btn = gr.Button("🛑 Stop (Auto-save)", variant="stop", elem_classes=["fixed-height-btn"])
         
         with gr.Row():
             with gr.Column(scale=4):
-                metrics_panel = gr.HTML(value=get_vocab_metrics_html(0, "00:00", "00:00", "0.0 сл/с"))
-                output_text = gr.Textbox(label="Готовый словарь", lines=10, max_lines=15, interactive=True)
+                metrics_panel = gr.HTML(value=get_vocab_metrics_html(0, "00:00", "00:00", "0.0 w/s"))
+                output_text = gr.Textbox(label="Ready dictionary", lines=10, max_lines=15, interactive=True)
             with gr.Column(scale=1):
-                save_btn = gr.Button("💾 Ручное сохранение (Экспорт)", variant="primary", elem_classes=["fixed-height-btn"])
-                clean_errors_btn = gr.Button("🧹 Очистить от мусора API", variant="secondary", elem_classes=["fixed-height-btn"])
-                save_status = gr.Textbox(label="Статус выполнения", interactive=False, lines=3)
-                download_files = gr.File(label="Скачать экспорты", interactive=False)
+                save_btn = gr.Button("💾 Manual save (Export)", variant="primary", elem_classes=["fixed-height-btn"])
+                clean_errors_btn = gr.Button("🧹 Clean API junk", variant="secondary", elem_classes=["fixed-height-btn"])
+                save_status = gr.Textbox(label="Execution status", interactive=False, lines=3)
+                download_files = gr.File(label="Download exports", interactive=False)
             
         parse_btn.click(
-            fn=lambda: (gr.update(value="⏳ Запуск..."), get_vocab_metrics_html(0, "00:00", "00:00", "0.0 сл/с", "Подготовка")),
+            fn=lambda: (gr.update(value="⏳ Starting..."), get_vocab_metrics_html(0, "00:00", "00:00", "0.0 w/s", "Preparing")),
             outputs=[output_text, metrics_panel]
         ).then(
             fn=extract_and_translate,

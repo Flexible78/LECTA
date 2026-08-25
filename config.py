@@ -1,9 +1,36 @@
 import json
+import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 import argparse
 
 APP_NAME = "TTS-Server"
+
+# URL of the LECTA GitHub repository.
+# NOTE: The repository is currently private. This link will become
+# active once the repo is published. See BF3 of the public-release task.
+LECTA_REPO_URL = "https://github.com/Flexible78/LECTA"
+
+
+# Number of simultaneous TTS synthesis tasks. Reduced from 8 to 4 to keep GPU
+# temperature under control (8 parallel F5-TTS on 6 GB VRAM caused 88 °C).
+# Override with the LECTA_TTS_WORKERS environment variable.
+TTS_WORKERS = int(os.getenv("LECTA_TTS_WORKERS", "4"))
+
+# Pause between files in batch mode, seconds (0 = disabled).
+TTS_COOLDOWN_SEC = int(os.getenv("LECTA_TTS_COOLDOWN_SEC", "5"))
+
+# Soft GPU temperature threshold, °C. Synthesis pauses when reached.
+# Lowered from 83 → 80 to prevent GPU crashes / driver resets on hot cards.
+TTS_GPU_TEMP_LIMIT_C = int(os.getenv("LECTA_GPU_TEMP_LIMIT", "80"))
+
+# Temperature to resume synthesis after a cooldown pause, °C.
+# Must be noticeably lower than the limit. Lowered 76 → 72 accordingly.
+TTS_GPU_TEMP_RESUME_C = int(os.getenv("LECTA_GPU_TEMP_RESUME", "72"))
+
+# GPU power limit in watts. Requires nvidia-smi AND administrator rights,
+# therefore not used by default. Change manually only.
+TTS_GPU_POWER_LIMIT_W = None
 # Path.home() может вернуть относительный путь (например 'tmp'), если
 # USERPROFILE/appdata заданы как относительные в Start.cmd (портабельная сборка).
 # Разрешаем относительно каталога config.py (fb2tts/), чтобы путь всегда был абсолютным.
@@ -31,9 +58,9 @@ class AppConfig:
     sp_rate: float = 1
     back_sound_sel: str = ''
     bitrate: int = 96
-    noise_lvl: int = 16
+    noise_lvl: int = 10  # F5-TTS inference steps: 4=fast, 10=balanced, 16=high quality, 32=max
     use_sound_effect: bool = False
-    models_path: str = 'models'
+    models_path: str = os.getenv("LECTA_MODELS_DIR", "models")
     data_path: str = 'data'
     # Edge TTS cloud flags (сохраняются между перезапусками)
     use_edge_english: bool = False
@@ -44,11 +71,11 @@ class AppConfig:
 
     @staticmethod
     def parse_args():
-        parser = argparse.ArgumentParser(description="Параметры запуска TTS-сервера")
-        parser.add_argument("--port", type=int, default=7860, help="Порт для запуска сервера")
-        parser.add_argument("--share", action="store_true", help="Создать публичную ссылку")
-        parser.add_argument("--debug", action="store_true", help="Режим отладки")
-        parser.add_argument("--server-name", type=str, default="0.0.0.0", help="Адрес сервера")
+        parser = argparse.ArgumentParser(description="LECTA TTS server launch options")
+        parser.add_argument("--port", type=int, default=int(os.getenv("LECTA_PORT", "7860")), help="Port to run the server on")
+        parser.add_argument("--share", action="store_true", help="Create a public share link")
+        parser.add_argument("--debug", action="store_true", help="Debug mode")
+        parser.add_argument("--server-name", type=str, default="0.0.0.0", help="Server bind address")
         args = parser.parse_args()
         
         return AppConfig(

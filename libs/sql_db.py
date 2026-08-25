@@ -13,7 +13,7 @@ class SQLiteDatabase:
             self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
             self.conn.row_factory = sqlite3.Row  # для доступа по имени
         except sqlite3.Error as e:
-            logging.error(f"Не удалось подключиться к БД {self.db_path}: {e}")
+            logging.error(f"Failed to connect to database {self.db_path}: {e}")
             raise
 
     def select(self, db_name: str, colls: Dict[str, Any], args: dict = {}) -> List[List[Any]]:
@@ -31,10 +31,10 @@ class SQLiteDatabase:
         try:
             cursor.execute(query, where_values)
             result = [list(row) for row in cursor.fetchall()]
-            logging.debug(f"Выполнен SELECT: {query}, параметры: {where_values}, найдено: {len(result)}")
+            logging.debug(f"SELECT executed: {query}, params: {where_values}, found: {len(result)}")
             return result
         except sqlite3.Error as e:
-            logging.error(f"Ошибка SELECT из {db_name}: {e}")
+            logging.error(f"SELECT error from {db_name}: {e}")
             return []
 
     def delete(self, table: str, condition: Dict[str, Any]) -> bool:
@@ -46,7 +46,7 @@ class SQLiteDatabase:
             self.conn.commit()
             return cursor.rowcount > 0
         except sqlite3.Error as e:
-            logging.error(f"Ошибка DELETE из таблицы {table}: {e}")
+            logging.error(f"DELETE error from table {table}: {e}")
             return False
 
     def upsert(self, table: str, data: Dict[str, Any]) -> bool:
@@ -62,7 +62,7 @@ class SQLiteDatabase:
             self.conn.commit()
             return True
         except sqlite3.Error as e:
-            logging.error(f"Ошибка INSERT/REPLACE в таблицу {table}: {e}")
+            logging.error(f"INSERT/REPLACE error into table {table}: {e}")
             return False
 
     def close(self):

@@ -52,7 +52,7 @@ class Model:
         model_dir = models_path / f"vosk-model-tts-ru-{model_name}-multi"
         
         if not model_dir.exists():
-            print(f'Загрузка Vosk TTS {model_name}')
+            print(f'Loading Vosk TTS {model_name}')
             url = f"https://myfreenet.ru/models/vosk-model-tts-ru-{model_name}-multi.zip"
             zip_path = models_path / model_dir.with_suffix('.zip')
             m, status = download_model(url, zip_path)

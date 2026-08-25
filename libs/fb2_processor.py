@@ -86,23 +86,14 @@ class FB2Processor:
         return notes
 
     def split_sections(self, in_xml: etree._Element) -> List[Dict[str, dict]]:
+        """One output file per section that already exists in the source book.
+
+        The structure of the source file is respected as-is: sections that
+        contain sub-sections are NOT split into additional files any more.
+        """
         sections = []
         for index, sect in enumerate(in_xml.xpath("./section"), start=1):
-            if (sub_sects := sect.xpath("./section")):
-                titles = sect.xpath("./title")
-                if len(titles) >= 1:
-                    title_text = ''
-                    for title in titles:
-                        for sel in title:
-                            if sel.text is not None:
-                                title_text = title_text + sel.text + '. '
-                for sub_index, sub_sect in enumerate(sub_sects, start=1):
-                    if sub_index == 1:
-                        sections.append({f'{index}_{sub_index}': {'sect': sub_sect, 'title': title_text}})
-                    else:
-                        sections.append({f'{index}_{sub_index}': {'sect': sub_sect}})
-            else:
-                sections.append({f'{index}': {'sect': sect}})
+            sections.append({f'{index}': {'sect': sect}})
 
         return sections
 
@@ -182,7 +173,7 @@ class FB2Processor:
                                 translated = re.sub(r'[a-zA-Z\']+', force_en_ru, translated)
                             if translated: elem.text = translated
                     except Exception as e:
-                        elem.text = f"[ОШИБКА ПЕРЕВОДА] " + elem.text
+                        elem.text = f"[TRANSLATION ERROR] " + elem.text
 
                 # Определяем, есть ли в тексте некириллические/нелатинские символы (иврит, арабский, CJK)
                 has_non_european = bool(re.search(r'[\u0590-\u05FF\u0600-\u06FF\u4E00-\u9FFF]', elem.text))
@@ -215,7 +206,7 @@ class FB2Processor:
                 if idx == 0:
                     cite_elem.addprevious(etree.Element("break", time="2"))
                     p.set("position", "start")
-                if child.tag == "text-author" and child.text: p.text = "Автор " + child.text
+                if child.tag == "text-author" and child.text: p.text = "Author " + child.text
                 else: p.text = child.text or ""
                 cite_elem.addprevious(p)
             cite_elem.getparent().remove(cite_elem)
@@ -238,14 +229,14 @@ class FB2Processor:
 
     @staticmethod
     def save_xml(content: str, filename: str):
-        if not content: return "Содержимое пустое"
+        if not content: return "Content is empty"
         file_path = Path(filename)
         try:
             parser = etree.XMLParser(resolve_entities=False, no_network=True)
             etree.fromstring(content.encode("utf-8"), parser=parser)
             file_path.write_text(content, encoding="utf-8")
-            return f"Сохранено: {file_path.name}"
-        except Exception as e: return f"Ошибка: {str(e)}"
+            return f"Saved: {file_path.name}"
+        except Exception as e: return f"Error: {str(e)}"
 
     def process_book(
         self, ab_path: str, replace: bool = False, sound_effect: bool = True,
@@ -257,7 +248,7 @@ class FB2Processor:
         config.translit = translit
         
         if not ab_path:
-            yield 0, "❌ Ошибка: Проект не выбран"
+            yield 0, "❌ Error: No project selected"
             return
             
         work_dir = data_path / ab_path
@@ -266,18 +257,18 @@ class FB2Processor:
         xml_path.mkdir(parents=True, exist_ok=True)
 
         if not fb2_file.exists():
-            yield 0, f"❌ Файл {fb2_file} не найден"
+            yield 0, f"❌ File {fb2_file} not found"
             return
 
         try:
             root = self.remove_namespaces(fb2_file)
         except Exception as e:
-            yield 0, f"❌ Ошибка парсинга XML: {e}"
+            yield 0, f"❌ XML parsing error: {e}"
             return
 
         body = root.xpath("//body[not(@name)]")
         if not body:
-            yield 0, "❌ Нет основного body в FB2"
+            yield 0, "❌ No main body found in FB2"
             return
 
         metadata = self.extract_metadata(root)
@@ -287,14 +278,14 @@ class FB2Processor:
 
         for idx, section_dict in enumerate(sections, start=1):
             if self.stop_parsing:
-                yield int((idx / total_sections) * 100), "🛑 Прервано пользователем"
+                yield int((idx / total_sections) * 100), "🛑 Interrupted by user"
                 return
 
             (f_name, sect_data), = section_dict.items()
             xml_file = xml_path / f"{f_name}.xml"
 
             if xml_file.exists() and not replace:
-                yield int((idx / total_sections) * 100), f"🟡 Пропуск: {f_name}.xml существует"
+                yield int((idx / total_sections) * 100), f"🟡 Skipping: {f_name}.xml already exists"
                 continue
 
             element = sect_data["sect"]
@@ -347,6 +338,6 @@ class FB2Processor:
                 xml_path.mkdir(parents=True, exist_ok=True)
                 tree.write(str(xml_file), encoding="utf-8", pretty_print=True)
 
-            yield int((idx / total_sections) * 100), f"✅ Обработано: {f_name}"
+            yield int((idx / total_sections) * 100), f"✅ Processed: {f_name}"
             
-        yield 100, "🎉 Готово"
+        yield 100, "🎉 Done"

@@ -12,18 +12,18 @@ from google.auth.transport.requests import Request as GoogleRequest
 
 app = FastAPI()
 
-# ── Настройки ──────────────────────────────────────────────────────────────────
-# Все пути определяются автоматически из папки Gemini CLI текущего пользователя.
-# Менять вручную не нужно.
+# ── Settings ───────────────────────────────────────────────────────────────────
+# All paths are resolved automatically from the current user's Gemini CLI folder.
+# No manual changes needed.
 
-GEMINI_DIR = os.path.expanduser("~/.gemini")          # ~/.gemini (работает на Win/Mac/Linux)
+GEMINI_DIR = os.path.expanduser("~/.gemini")          # ~/.gemini (works on Win/Mac/Linux)
 TOKEN_FILE_PATH = os.path.join(GEMINI_DIR, "oauth_creds.json")
-GEMINI_CLI_VERSION = "0.40.0"                          # версия для User-Agent
+GEMINI_CLI_VERSION = "0.40.0"                          # version for User-Agent
 HOST = "127.0.0.1"
-PORT = 8080
+PORT = int(os.getenv("LECTA_PROXY_PORT", "8080"))
 
-# OAuth client ID/Secret Gemini CLI (одинаковые для всех пользователей,
-# зашиты в бандле Gemini CLI — извлечены из chunk-3OSQ5US4.js)
+# OAuth client ID/Secret Gemini CLI (same for all users,
+# embedded in the Gemini CLI bundle — extracted from chunk-3OSQ5US4.js)
 def _load_gemini_cli_oauth():
     """Try to read CLIENT_ID/SECRET from Gemini CLI bundle automatically."""
     try:
@@ -52,8 +52,8 @@ def _load_gemini_cli_oauth():
 _auto_id, _auto_secret = _load_gemini_cli_oauth()
 if not _auto_id or not _auto_secret:
     raise RuntimeError(
-        "Не удалось найти CLIENT_ID/SECRET в бандле Gemini CLI. "
-        "Убедитесь что Gemini CLI установлен (npm install -g @google/gemini-cli)."
+        "Failed to find CLIENT_ID/SECRET in the Gemini CLI bundle. "
+        "Ensure Gemini CLI is installed (npm install -g @google/gemini-cli)."
     )
 CLIENT_ID     = _auto_id
 CLIENT_SECRET = _auto_secret
@@ -103,12 +103,12 @@ def get_credentials():
         scopes=data.get("scope", "").split(),
     )
     if not creds.valid:
-        log.info("Обновляем токен...")
+        log.info("Refreshing token...")
         creds.refresh(GoogleRequest())
         data["access_token"] = creds.token
         with open(TOKEN_FILE_PATH, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
-        log.info("Токен обновлён")
+        log.info("Token refreshed")
     return creds
 
 async def get_project_id(token: str) -> str:
@@ -118,7 +118,7 @@ async def get_project_id(token: str) -> str:
     async with project_id_lock:
         if project_id_cache:
             return project_id_cache
-        log.info("Получаем projectId через loadCodeAssist...")
+        log.info("Getting projectId via loadCodeAssist...")
         for attempt in range(2):
             async with httpx.AsyncClient() as client:
                 resp = await client.post(
@@ -129,7 +129,7 @@ async def get_project_id(token: str) -> str:
                 )
                 log.debug("loadCodeAssist status=%s body=%s", resp.status_code, resp.text[:500])
                 if resp.status_code == 401 and attempt == 0:
-                    log.warning("401 в loadCodeAssist, обновляем токен...")
+                    log.warning("401 in loadCodeAssist, refreshing token...")
                     creds = get_credentials()
                     creds.refresh(GoogleRequest())
                     token = creds.token
@@ -144,7 +144,7 @@ async def get_project_id(token: str) -> str:
                 project_id_cache = result.get("cloudaicompanionProject") or result.get("projectId") or ""
                 log.info("projectId: %s", project_id_cache)
                 return project_id_cache
-        raise Exception("Не удалось получить projectId после обновления токена")
+        raise Exception("Failed to get projectId after token refresh")
 
 # ── Format converters ──────────────────────────────────────────────────────────
 
@@ -308,14 +308,14 @@ async def gemini_post(token: str, project_id: str, gemini_model: str, payload: d
     }
     async with httpx.AsyncClient() as client:
         for attempt in range(5):
-            log.debug("Отправляем запрос model=%s (попытка %d/5)...", gemini_model, attempt + 1)
+            log.debug("Sending request model=%s (attempt %d/5)...", gemini_model, attempt + 1)
             response = await client.post(
                 f"{CODE_ASSIST_BASE}:streamGenerateContent",
                 headers=headers, json=payload, timeout=120.0
             )
             log.debug("<<< status=%d body=%s", response.status_code, response.text[:500])
             if response.status_code == 401:
-                log.warning("401, принудительно обновляем токен...")
+                log.warning("401, forcing token refresh...")
                 with open(TOKEN_FILE_PATH, "r", encoding="utf-8") as f:
                     cred_data = json.load(f)
                 creds = Credentials(
@@ -330,7 +330,7 @@ async def gemini_post(token: str, project_id: str, gemini_model: str, payload: d
                 with open(TOKEN_FILE_PATH, "w", encoding="utf-8") as f:
                     json.dump(cred_data, f, indent=2)
                 headers["Authorization"] = f"Bearer {creds.token}"
-                log.info("Токен обновлён, повторяем запрос...")
+                log.info("Token refreshed, retrying request...")
                 continue
             if response.status_code == 429:
                 if "MODEL_CAPACITY_EXHAUSTED" in response.text:
@@ -341,7 +341,7 @@ async def gemini_post(token: str, project_id: str, gemini_model: str, payload: d
                 m = re.search(r"reset after (\d+)s", response.text)
                 if m:
                     wait = int(m.group(1)) + 1
-                log.warning("429, ждём %dс...", wait)
+                log.warning("429, waiting %ds...", wait)
                 await asyncio.sleep(wait)
                 continue
             log.debug("<<< FULL BODY: %s", response.text)
@@ -350,12 +350,12 @@ async def gemini_post(token: str, project_id: str, gemini_model: str, payload: d
             if not isinstance(chunks, list):
                 chunks = [chunks]
             return chunks
-    raise Exception("Превышено число попыток после 429")
+    raise Exception("Exceeded retry limit after 429")
 
 # ── Models ─────────────────────────────────────────────────────────────────────
 
 GEMINI_MODELS = {
-    "auto":                   ("gemini-3-flash-preview",        "Авто",                  True),
+    "auto":                   ("gemini-3-flash-preview",        "Auto",                  True),
     "gemini-2.5-pro":         ("gemini-2.5-pro",                "Gemini 2.5 Pro",         True),
     "gemini-2.5-flash":       ("gemini-2.5-flash",              "Gemini 2.5 Flash",       True),
     "gemini-2.5-flash-lite":  ("gemini-2.5-flash-lite",         "Gemini 2.5 Flash Lite",  True),
@@ -395,7 +395,7 @@ async def handle_claude_request(request: Request):
         system = " ".join(b.get("text", "") for b in system if b.get("type") == "text")
     # Remove billing header noise to reduce token count
     system = re.sub(r"x-anthropic-billing-header:[^\n]+\n?", "", system).strip()
-    system_text = (system + "\nВсегда отвечай на русском языке.").strip()
+    system_text = (system + "\nAlways answer in English.").strip()
 
     creds = get_credentials()
     token = creds.token
@@ -403,7 +403,7 @@ async def handle_claude_request(request: Request):
 
     requested_model = data.get("model", "gemini-2.5-flash")
     gemini_model, _, _ = GEMINI_MODELS.get(requested_model, ("gemini-2.5-flash", "", False))
-    log.info("Модель: %s -> %s", requested_model, gemini_model)
+    log.info("Model: %s -> %s", requested_model, gemini_model)
 
     # Convert messages history - keep only last 20 messages to limit token count
     # (same approach as Gemini CLI's truncateHistoryToBudget)
@@ -424,7 +424,7 @@ async def handle_claude_request(request: Request):
     if tools:
         gemini_tools = anthropic_tools_to_gemini(tools)
         payload["request"]["tools"] = [{"functionDeclarations": gemini_tools}]
-        log.debug("Передаём %d инструментов в Gemini", len(gemini_tools))
+        log.debug("Passing %d tools to Gemini", len(gemini_tools))
 
     # Dedup cache key based on last message
     last_msg_key = json.dumps(messages[-1] if messages else {}, ensure_ascii=False, sort_keys=True)
@@ -433,7 +433,7 @@ async def handle_claude_request(request: Request):
     if dedup_key in result_cache:
         cached, ts = result_cache[dedup_key]
         if asyncio.get_event_loop().time() - ts < 5:
-            log.info("Возвращаем кэшированный ответ")
+            log.info("Returning cached response")
             return cached
         del result_cache[dedup_key]
 
@@ -447,11 +447,11 @@ async def handle_claude_request(request: Request):
                     break
                 except Exception as e:
                     if "MODEL_CAPACITY_EXHAUSTED" in str(e) or "429" in str(e):
-                        log.warning("429/capacity для %s, пробуем следующую...", try_model)
+                        log.warning("429/capacity for %s, trying next...", try_model)
                         continue
                     raise
             if chunks is None:
-                raise Exception("Все модели недоступны")
+                raise Exception("All models unavailable")
         else:
             chunks = await gemini_post(token, project_id, gemini_model, payload)
         result = gemini_response_to_anthropic(chunks)
@@ -462,17 +462,17 @@ async def handle_claude_request(request: Request):
         log.info("stop_reason=%s content_blocks=%d", result["stop_reason"], len(result["content"]))
         # Claude app requires at least one content block
         if not result["content"]:
-            log.debug("Пустой ответ от Gemini, добавляем placeholder")
+            log.debug("Empty response from Gemini, adding placeholder")
             result["content"] = [{"type": "text", "text": "✓"}]
         if result["content"]:
             first = result["content"][0]
             if first["type"] == "text":
-                log.info("Ответ: %s", first["text"][:200])
+                log.info("Response: %s", first["text"][:200])
             else:
                 log.info("tool_use: %s args=%s", first.get("name"), str(first.get("input", {}))[:200])
     except Exception as e:
-        log.error("Ошибка запроса: %s", e)
-        result = {"content": [{"type": "text", "text": f"Ошибка: {e}"}], "stop_reason": "end_turn"}
+        log.error("Request error: %s", e)
+        result = {"content": [{"type": "text", "text": f"Error: {e}"}], "stop_reason": "end_turn"}
 
     response_body = {
         "id": f"msg_{uuid.uuid4().hex[:16]}",
@@ -489,8 +489,15 @@ async def handle_claude_request(request: Request):
 
 if __name__ == "__main__":
     load_thought_sigs()
-    log.info("Токен: %s", TOKEN_FILE_PATH)
-    log.info("Лог: %s", LOG_FILE)
+    log.info("Token: %s", TOKEN_FILE_PATH)
+    log.info("Log: %s", LOG_FILE)
     log.info("CLIENT_ID: %s", CLIENT_ID[:30] + "...")
-    log.info("Запущен на http://%s:%d", HOST, PORT)
-    uvicorn.run(app, host=HOST, port=PORT)
+    log.info("Running on http://%s:%d", HOST, PORT)
+    try:
+        uvicorn.run(app, host=HOST, port=PORT)
+    except OSError as e:
+        raise RuntimeError(
+            f"Failed to bind port {PORT}. The port may already be in use. "
+            f"Set LECTA_PROXY_PORT to a free port (e.g. LECTA_PROXY_PORT=8081) and restart. "
+            f"Original error: {e}"
+        ) from e

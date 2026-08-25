@@ -23,14 +23,14 @@ def load_image(ab_name):
         try:
             get_cover_image(ab_name)
         except Exception as e:
-            logger.error(f"Не удалось загрузить обложку: {e}")
+            logger.error(f"Failed to load cover image: {e}")
     
     if destination_path.exists():
         try:
             img = Image.open(str(destination_path))
             return img
         except Exception as e:
-            logger.error(f"Не удалось открыть обложку: {e}")
+            logger.error(f"Failed to open cover image: {e}")
             # Fallback: return empty image placeholder
             img = Image.new('RGB', (200, 300), color='gray')
             return img
@@ -71,7 +71,7 @@ def save_cover_image(ab_name, cv_img):
     if destination_path.exists():
         destination_path.unlink()
     
-    gr.Info("Файл загружен", duration=4)
+    gr.Info("File uploaded", duration=4)
     return convert_to_jpg(cv_img, destination_path)
 
 def get_cover_image(ab_name):
@@ -92,7 +92,7 @@ def get_cover_image(ab_name):
     else:
         image_path = now_dir / 'libs' / 'cover.jpg'
         if not image_path.exists():
-            logger.warning(f"Файл заглушки обложки не найден: {image_path}")
+            logger.warning(f"Cover placeholder file not found: {image_path}")
             img = Image.new('RGB', (200, 300), color='gray')
             img.save(str(cover_file))
             return img
@@ -104,7 +104,7 @@ def gen_cover(ab_name):
     file_path = book_path / f'{ab_name}.fb2'
     
     if not file_path.exists():
-        gr.Warning(f"Файл {file_path} не найден")
+        gr.Warning(f"File {file_path} not found")
         return load_image(ab_name)
     
     desc = processor.remove_namespaces(str(file_path))
@@ -121,13 +121,13 @@ def gen_cover(ab_name):
     return load_image(ab_name)
 
 def cover_tab(ab_path, ab_state):
-    with gr.Tab("Обложка", id=0) as cv_tab:
+    with gr.Tab("Cover", id=0) as cv_tab:
         with gr.Row():
             cur_image = gr.State()
             cover_image = gr.Image(interactive=True, sources=['upload', 'clipboard'])
         with gr.Row():
-            cover_from_fb2 = gr.Button("Получить изображение из FB2")
-            text_button = gr.Button("Подписать изображение")
+            cover_from_fb2 = gr.Button("Get image from FB2")
+            text_button = gr.Button("Caption the image")
 
     ab_state.change(
         fn=load_image,

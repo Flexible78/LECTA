@@ -1,10 +1,10 @@
 # ==========================================
-# CORE & UI (Основной движок и интерфейс)
+# CORE & UI (main engine and interface)
 # ==========================================
 gradio==6.5.1
 
 # ==========================================
-# ML & AUDIO PROCESSING (Синтез речи и ИИ)
+# ML & AUDIO PROCESSING (speech synthesis and AI)
 # ==========================================
 librosa==0.11.0
 numpy==2.3.5
@@ -21,17 +21,17 @@ vocos==0.1.0
 x-transformers==2.16.0
 
 # ==========================================
-# TEXT & PARSING (Обработка текста и парсинг)
+# TEXT & PARSING (text processing and parsing)
 # ==========================================
 lxml==6.0.2
 pymorphy3==2.0.6
 rjieba==0.2.0
 requests==2.32.5
-deep-translator
-edge-tts
+deep-translator>=1.11,<2.0
+edge-tts>=6.1,<7.0
 
 # ==========================================
-# PROXY & ASYNC (Бэкенд-прокси для Gemini API)
+# PROXY & ASYNC (backend proxy for Gemini API)
 # ==========================================
 fastapi==0.115.12
 uvicorn==0.34.2

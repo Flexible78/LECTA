@@ -40,6 +40,7 @@ tts.db
 *.sqlite
 *.sqlite3
 tts_ui_settings.json
+tree.txt
 
 # ---- secrets, never in git ----
 .env
@@ -56,6 +57,8 @@ thought_sigs.json
 # ---- scratch files ----
 *OLD
 *.bak
+*.orig
+*.rej
 repomix-output.*
 
 # ---- IDE / OS ----
@@ -64,3 +67,4 @@ repomix-output.*
 .DS_Store
 Thumbs.db
 nul
+*.bundle
