@@ -15,25 +15,107 @@ custom_css = """
   --lecta-border-strong: #475569;
   --lecta-text: #f8fafc;
   --lecta-text-dim: #94a3b8;
-  --lecta-accent: #f97316;
-  --lecta-accent-2: #ea580c;
-  --lecta-info: #38bdf8;
-  --lecta-ok: #10b981;
-  --lecta-err: #f43f5e;
+  --lecta-accent: #c07a45;
+  --lecta-accent-2: #a3642f;
+  --lecta-info: #6b9cc4;
+  --lecta-ok: #4f9e80;
+  --lecta-err: #c05e72;
   --lecta-radius: 12px;
   --lecta-radius-sm: 8px;
   --lecta-shadow: 0 8px 24px rgba(2, 6, 23, 0.45);
-  --lecta-focus: 0 0 0 3px rgba(249, 115, 22, 0.35);
+  --lecta-focus: 0 0 0 3px rgba(192, 122, 69, 0.22);
 }
 
 /* --- App shell --- */
 gradio-app, .gradio-container {
-  background: radial-gradient(1200px 600px at 15% -10%, #172033 0%, var(--lecta-bg) 55%) !important;
+  background: radial-gradient(1200px 600px at 15% -10%, #121a29 0%, var(--lecta-bg) 55%) !important;
   color: var(--lecta-text) !important;
 }
-.gradio-container { max-width: 1500px !important; margin: 0 auto !important; }
+.gradio-container {
+  max-width: 100% !important;
+  margin: 0 auto !important;
+  padding: 12px !important;
+}
+/* FIX: prevent sidebar from overlapping main content area */
+.gradio-container .main, .gradio-container .contain {
+  display: flex !important;
+  flex-wrap: nowrap !important;
+  gap: 16px !important;
+}
+/* Sidebar should not overflow into content */
+.gradio-container .sidebar, .gradio-container > .contain > .sidebar {
+  min-width: 240px !important;
+  max-width: 280px !important;
+  flex-shrink: 0 !important;
+  overflow-y: auto !important;
+  overflow-x: visible !important;
+  position: relative !important;
+  z-index: 1 !important;
+}
+/* Main content takes remaining space */
+.gradio-container .main > .wrap, .gradio-container > .contain > .wrap {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  overflow-x: hidden !important;
+}
+/* Fix overlay: ensure content area doesn't get obscured */
+.gradio-container .contain > .wrap > .tabs, 
+.gradio-container .contain > .wrap > div {
+  position: relative !important;
+  z-index: 1 !important;
+}
 .gradio-container h1 { letter-spacing: -0.02em !important; }
 .gradio-container h1, .gradio-container h2, .gradio-container h3 { color: var(--lecta-text) !important; }
+
+/* --- Header: compact, pinned to the top --- */
+.gradio-container {
+  padding-top: 6px !important;
+}
+#lecta-header {
+  margin: 0 0 4px 0 !important;
+  padding: 0 !important;
+}
+#lecta-header .prose, #lecta-header div {
+  margin: 0 !important;
+  padding: 0 !important;
+  min-height: 0 !important;
+}
+#lecta-header h1 { font-size: 20px !important; margin: 0 !important; }
+#lecta-header p { margin: 1px 0 0 0 !important; line-height: 1.3 !important; }
+/* Remove stray vertical gap above the first content block */
+.gradio-container .contain > div:first-child,
+.gradio-container .main .wrap > div:first-child { margin-top: 0 !important; }
+
+/* --- Sidebar: compact --- */
+.gradio-container .sidebar {
+  gap: 4px !important;
+  padding: 8px 10px !important;
+}
+.gradio-container .sidebar .block,
+.gradio-container .sidebar .form {
+  padding: 2px 4px !important;
+  margin: 0 !important;
+}
+.gradio-container .sidebar .gap { gap: 4px !important; }
+.gradio-container .sidebar label > span,
+.gradio-container .sidebar span[data-testid=block-info] {
+  font-size: 11px !important;
+  line-height: 1.25 !important;
+}
+.gradio-container .sidebar label > span[data-testid="block-info"],
+.gradio-container .sidebar span.info,
+.gradio-container .sidebar label small {
+  font-size: 10px !important;
+  line-height: 1.2 !important;
+  color: #64748b !important;
+}
+.gradio-container .sidebar button {
+  min-height: 30px !important;
+  padding: 4px 8px !important;
+  font-size: 12px !important;
+}
+.gradio-container .sidebar hr { margin: 4px 0 !important; }
+.gradio-container .sidebar p { margin: 2px 0 !important; font-size: 12px !important; }
 
 /* --- Tab bar: sticky, obvious active state --- */
 .tab-nav, .tabs > .tab-nav {
@@ -64,7 +146,7 @@ gradio-app, .gradio-container {
 .tab-nav button.selected {
   color: #0b1120 !important;
   background: linear-gradient(180deg, var(--lecta-accent), var(--lecta-accent-2)) !important;
-  box-shadow: 0 2px 10px rgba(249, 115, 22, 0.35) !important;
+  box-shadow: 0 2px 10px rgba(192, 122, 69, 0.18) !important;
 }
 
 /* --- Cards / blocks --- */
@@ -117,7 +199,7 @@ button.primary, .gr-button-primary {
   border: none !important;
   font-weight: 700 !important;
   border-radius: var(--lecta-radius-sm) !important;
-  box-shadow: 0 4px 14px rgba(249, 115, 22, 0.28) !important;
+  box-shadow: 0 4px 14px rgba(192, 122, 69, 0.15) !important;
 }
 button.secondary, .gr-button-secondary {
   background: var(--lecta-surface-3) !important;
@@ -160,7 +242,7 @@ button:disabled { opacity: 0.5 !important; cursor: not-allowed !important; }
   letter-spacing: 0.06em !important;
 }
 .gr-dataframe tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.02) !important; }
-.gr-dataframe tbody tr:hover { background: rgba(249, 115, 22, 0.08) !important; }
+.gr-dataframe tbody tr:hover { background: rgba(192, 122, 69, 0.07) !important; }
 
 /* --- Sliders and checkboxes --- */
 input[type=range] { accent-color: var(--lecta-accent) !important; }
@@ -198,6 +280,15 @@ input[type=checkbox], input[type=radio] { accent-color: var(--lecta-accent) !imp
 *::-webkit-scrollbar-track { background: transparent; }
 *::-webkit-scrollbar-thumb { background: var(--lecta-border-strong); border-radius: 8px; }
 *::-webkit-scrollbar-thumb:hover { background: var(--lecta-accent) !important; }
+
+/* --- Tighter vertical rhythm between rows/blocks --- */
+.gradio-container .main .gap,
+.gradio-container .wrap .gap,
+.gradio-container .contain .gap {
+  gap: 8px !important;
+}
+.gradio-container .main .gap > *,
+.gradio-container .wrap .gap > * { margin-top: 0 !important; margin-bottom: 0 !important; }
 
 /* --- Misc --- */
 footer { display: none !important; }

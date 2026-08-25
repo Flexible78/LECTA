@@ -1,6 +1,16 @@
 import os
 os.environ["GRADIO_LANGUAGE"] = "en"
 
+# ── Фикс UnicodeEncodeError: консоль Windows (cp1251) не умеет эмодзи (🔧☁️✅).
+# Переводим stdout/stderr на UTF-8 с replace, чтобы логи не падали на эмодзи.
+import sys as _sys
+for _stream in (_sys.stdout, _sys.stderr):
+    try:
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 import gradio as gr
 from pathlib import Path
 import shutil
@@ -31,6 +41,7 @@ from libs.russian import normalize_russian
 from libs.document_parser import parse_and_save_document
 from libs.web_scraper import scrape_and_save_article
 from libs.ui_assets import custom_css, custom_head, get_upload_progress_html
+from libs.thermal import get_gpu_temp
 from libs.project_manager import (
     refresh_data, remove_dataset, remove_all_datasets,
     create_fb2_file, update_existing_fb2, delete_created_file
@@ -178,9 +189,12 @@ def _extract_file_path(file_obj):
         return file_obj.name
     return str(file_obj)
 
-def process_file_wrapper(manual_path, drop_files, remove_ru):
+def process_file_wrapper(manual_path, drop_files, remove_ru, bg_mode=False):
     """ГЕНЕРАТОР: загружает файлы → создаёт FB2 → парсит с прогресс-баром.
-    Каждый yield обновляет: dropdown проектов + прогресс + статус."""
+    Каждый yield обновляет: dropdown проектов + прогресс + статус.
+    Если bg_mode=True — после конвертации в FB2 запускает ПОЛНЫЙ цикл
+    (парсинг + озвучка + пакет из 3 файлов) в фоновом воркере, который
+    переживает закрытие GUI/браузера."""
     # ── Шаг 1: Сбор путей ──
     file_paths = []
     if manual_path and manual_path.strip():
@@ -224,6 +238,17 @@ def process_file_wrapper(manual_path, drop_files, remove_ru):
     first_ab = processed[0]
     total = len(processed)
     drop_update = refresh_data(first_ab)
+    
+    # ── Режим «в фоне»: конвертация сделана, дальше всё делает воркер ──
+    if bg_mode:
+        try:
+            from gr_tabs.tts_tab import launch_background_job
+            msg = launch_background_job(None, selected_projects=processed)
+            yield drop_update, drop_update, "", f"🎉 {msg}"
+            return
+        except Exception as e:
+            logger.warning(f"⚠️ Background launch failed, falling back to inline parse: {e}")
+            # fallback — парсим как обычно
     
     # ── Первый yield: обновляем dropdown + показываем начало прогресса ──
     yield drop_update, drop_update, get_upload_progress_html(0, 0, total, "Starting..."), f"📦 Loaded {total} projects. Starting parse..."
@@ -374,7 +399,7 @@ def load_existing_fb2(ab_name):
 
 global_shortcuts = """
 <style>
-.gradio-container { max-width: 98% !important; padding: 10px !important; }
+.gradio-container { max-width: 100% !important; padding: 12px !important; }
 .form { border-radius: 8px !important; box-shadow: none !important; }
 div[data-testid="file-name"], span[data-testid="file-name"], .file-name, .file-preview {
     white-space: pre-wrap !important; word-break: break-all !important; overflow-wrap: break-word !important; overflow: visible !important; font-size: 13px !important; line-height: 1.2 !important;
@@ -387,10 +412,10 @@ div[data-testid="file-name"], span[data-testid="file-name"], .file-name, .file-p
 /* УБИВАЕМ УРОДЛИВЫЕ СКРОЛЛБАРЫ ИЗ ТЕКСТОВЫХ СТАТУСОВ */
 textarea[readonly] { overflow-y: hidden !important; resize: none !important; }
 
-#tts_btn, #batch_tts_btn, #demo_tts_btn, #fb2_gen_btn { background: linear-gradient(135deg, #00aff0 0%, #005a9e 100%) !important; color: white !important; border: none !important; box-shadow: inset 0px 1px 2px rgba(255, 255, 255, 0.5), 0 4px 10px rgba(0, 175, 240, 0.4) !important; border-radius: 6px !important; }
-#tts_btn:hover, #batch_tts_btn:hover, #demo_tts_btn:hover, #fb2_gen_btn:hover { background: linear-gradient(135deg, #00c3ff 0%, #0078d7 100%) !important; }
-#batch_tts_btn { background: linear-gradient(135deg, #f97316 0%, #ea580c 100%) !important; box-shadow: inset 0px 1px 2px rgba(255, 255, 255, 0.5), 0 4px 10px rgba(249, 115, 22, 0.4) !important; }
-#batch_tts_btn:hover { background: linear-gradient(135deg, #fb923c 0%, #f97316 100%) !important; }
+#tts_btn, #batch_tts_btn, #demo_tts_btn, #fb2_gen_btn { background: linear-gradient(135deg, #3f7ea6 0%, #2b5a78 100%) !important; color: white !important; border: none !important; box-shadow: inset 0px 1px 2px rgba(255, 255, 255, 0.3), 0 4px 10px rgba(63, 126, 166, 0.25) !important; border-radius: 6px !important; }
+#tts_btn:hover, #batch_tts_btn:hover, #demo_tts_btn:hover, #fb2_gen_btn:hover { background: linear-gradient(135deg, #4a8db5 0%, #34688a 100%) !important; }
+#batch_tts_btn { background: linear-gradient(135deg, #c07a45 0%, #a3642f 100%) !important; box-shadow: inset 0px 1px 2px rgba(255, 255, 255, 0.3), 0 4px 10px rgba(192, 122, 69, 0.25) !important; }
+#batch_tts_btn:hover { background: linear-gradient(135deg, #cf8a56 0%, #c07a45 100%) !important; }
 </style>
 <script>
 document.addEventListener('keydown', function(e) {
@@ -408,27 +433,28 @@ document.addEventListener('keydown', function(e) {
 with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew") as App:
     gr.HTML(global_shortcuts, visible=False)
     gr.Markdown(
-        "<div style='text-align:center; margin-bottom:8px;'>"
-        "<h1 style='margin:0; color:#38bdf8;'>LECTA</h1>"
-        "<p style='margin:2px 0; color:#94a3b8; font-size:14px;'>"
-        "Text-to-Speech for Russian, English and Hebrew"
-        "</p>"
-        "<p style='margin:2px 0; color:#64748b; font-size:12px;'>"
-        "KATAV writes, LECTA reads."
-        "</p>"
-        "<p style='margin:2px 0; color:#64748b; font-size:12px;'>"
-        "<a href='https://github.com/Flexible78/KATAV' target='_blank' rel='noopener' style='color:#38bdf8;'>KATAV on GitHub</a>"
-        "&nbsp;&nbsp;|&nbsp;&nbsp;"
-        "<a href='" + config_module.LECTA_REPO_URL + "' target='_blank' rel='noopener' style='color:#38bdf8;'>LECTA on GitHub</a>"
-        "&nbsp;&nbsp;|&nbsp;&nbsp;"
+        "<div id='lecta-header' style='text-align:center; margin:0; padding:0; line-height:1.25;'>"
+        "<h1 style='margin:0; color:#6b9cc4; font-size:20px; line-height:1.2;'>LECTA"
+        "<span style='color:#8fa3bd; font-size:12px; font-weight:400; margin-left:8px;'>Text-to-Speech for Russian, English and Hebrew</span>"
+        "</h1>"
+        "<p style='margin:1px 0 0 0; color:#64748b; font-size:11px; line-height:1.3;'>"
+        "KATAV writes, LECTA reads. &nbsp;|&nbsp; "
+        "<a href='https://github.com/Flexible78/KATAV' target='_blank' rel='noopener' style='color:#6b9cc4;'>KATAV on GitHub</a>"
+        "&nbsp;|&nbsp;"
+        "<a href='" + config_module.LECTA_REPO_URL + "' target='_blank' rel='noopener' style='color:#6b9cc4;'>LECTA on GitHub</a>"
+        "&nbsp;|&nbsp;"
         "Built on <a href='https://gitverse.ru/diger/fb2tts' target='_blank' rel='noopener' style='color:#64748b;'>fb2tts</a> by diger"
         "</p>"
-        "</div>"
+        "</div>",
+        elem_id="lecta-header"
     )
     
     tts_state = gr.State()
     acc_state = gr.State()
     ab_state = gr.State()
+
+    # ── GPU temperature: auto-refresh every 5 seconds via gr.Timer ──
+    gpu_temp_timer = gr.Timer(5, active=True)
     
     with gr.Sidebar():
         tts_sel = gr.Dropdown(value='', allow_custom_value=True, label='Select TTS model', choices=tts_models_list, interactive=True)
@@ -449,6 +475,9 @@ with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew")
         with gr.Row():
             eco_btn = gr.Button("♻ ECO (quiet / cool)", size="sm", elem_id="eco_btn",
                 variant="secondary")
+        
+        gr.Markdown("---")
+        gpu_temp_display = gr.HTML(value="<div style='padding:8px 12px; border-radius:8px; background:#1e293b; border:1px solid #334155; text-align:center;'><span style='color:#94a3b8; font-size:13px;'>GPU: checking...</span></div>", elem_id="gpu_temp_display")
         
         gr.Markdown("---")
         with gr.Row():
@@ -495,7 +524,12 @@ with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew")
                         with gr.Row(elem_classes=["uniform-row"]):
                             paste_file_btn = gr.Button("📋 From clipboard", variant="primary", elem_classes=["fixed-height-btn"], scale=1)
                             manual_file_input = gr.Textbox(label="File paths (one per line)", lines=2, scale=4, placeholder="C:\\books\\book1.fb2\nC:\\books\\book2.pdf")
-                        upload_text_file = gr.File(label="Or drag files here: PDF, DOCX, EPUB, RTF, HTML, FB2...", file_count="multiple", height=100)
+                        upload_text_file = gr.File(label="Or drag files here: PDF, DOCX, EPUB, RTF, HTML, FB2, ZIP...", file_count="multiple", height=100)
+                        bg_mode_cb = gr.Checkbox(
+                            label="⚡ Background mode (parse + TTS + 3-file package, close GUI OK)",
+                            value=False,
+                            interactive=True,
+                        )
                         process_file_btn = gr.Button("⬇️ Upload file(s)", variant="primary")
                 
                 with gr.Column(scale=1):
@@ -597,7 +631,7 @@ with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew")
             with gr.Row():
                 spk_sel = gr.Dropdown(value='', label='Select voice', choices=[''], interactive=True)
                 speech_rate = gr.Slider(0, 3, 1, step=0.1, label="Set speed", interactive=True)
-                noise_lvl = gr.Slider(0, 64, 16, step=1, label="Noise level", interactive=True)
+                noise_lvl = gr.Slider(4, 32, 10, step=2, label="F5-TTS steps (lower=faster)", interactive=True)
                 pitch_sel = gr.Slider(0, 100, 50, step=1, label="Pitch", interactive=True)
             with gr.Row():
                 text_input = gr.Textbox(label='Text', lines=2, placeholder="English | עברית | Russian", interactive=True, max_length=220)
@@ -681,6 +715,30 @@ with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew")
             pass
         return "♻ ECO mode: 2 workers, cooldown 15 s, temp limit 78°C"
     
+    def read_gpu_temp_display():
+        """Return a formatted HTML string showing GPU temperature with colour-coding.
+        Fully crash-proof: never raises, always returns valid HTML."""
+        try:
+            from config import TTS_GPU_TEMP_LIMIT_C
+            t = get_gpu_temp()
+        except Exception:
+            t = None
+        try:
+            limit = TTS_GPU_TEMP_LIMIT_C
+        except NameError:
+            limit = 80
+        if t is None:
+            return "<div style='padding:8px 12px; border-radius:8px; background:#1e293b; border:1px solid #334155; text-align:center;'><span style='color:#94a3b8; font-size:13px;'>GPU: N/A</span></div>"
+        if t >= limit:
+            color = "#f43f5e"; label = "HOT"
+        elif t >= 75:
+            color = "#f97316"; label = "Warm"
+        elif t >= 55:
+            color = "#eab308"; label = "Load"
+        else:
+            color = "#10b981"; label = "Cool"
+        return f"<div style='padding:8px 12px; border-radius:8px; background:#1e293b; border:1px solid #334155; text-align:center;'><span style='color:{color}; font-size:14px; font-weight:700;'>GPU {label}: {t}C</span></div>"
+    
     def preview_voice_handler(tts_model_val, spk):
         """Handler for preview voice button."""
         if not tts_model_val:
@@ -694,14 +752,16 @@ with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew")
     dict_mode_cb.change(set_dict_mode, inputs=dict_mode_cb, outputs=[])
 
     eco_btn.click(fn=eco_preset, outputs=tts_status)
+    gpu_temp_timer.tick(fn=read_gpu_temp_display, outputs=gpu_temp_display)
+
     preview_voice_btn.click(
         fn=preview_voice_handler,
         inputs=[tts_sel, spk_sel],
         outputs=[preview_status, preview_audio]
     )
 
-    tts_sel.select(tts_model_load, inputs=tts_sel, outputs=[tts_state, tts_status], show_progress_on=tts_status)
-    acc_sel.select(acc_model_load, inputs=acc_sel, outputs=[acc_state, acc_status], show_progress_on=acc_status)
+    tts_sel.select(tts_model_load, inputs=tts_sel, outputs=[tts_state, tts_status])
+    acc_sel.select(acc_model_load, inputs=acc_sel, outputs=[acc_state, acc_status])
     restart_btn.click(fn=restart_app, js=js_restart)
     quit_btn.click(fn=stop_app, js=js_exit)
 
@@ -710,7 +770,7 @@ with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew")
 
     process_file_btn.click(
         fn=process_file_wrapper, 
-        inputs=[manual_file_input, upload_text_file, remove_ru_cb], 
+        inputs=[manual_file_input, upload_text_file, remove_ru_cb, bg_mode_cb], 
         outputs=[ab_path, load_project_dropdown, upload_progress_html, upload_status_text]
     ).then(toggle_tab_parse, inputs=ab_path, outputs=[inner_tabs, ab_state]
     ).then(get_all_projects_xml, inputs=ab_path, outputs=parse_df_output)
