@@ -43,10 +43,21 @@ gradio-app, .gradio-container {
    and leaves dead space when collapsed. Just skin the panel and let the
    native collapse work: content automatically expands when it slides out. */
 .gradio-container .sidebar {
-  overflow-y: auto !important;
-  overflow-x: visible !important;
+  /* NEVER set overflow here: the toggle button lives OUTSIDE the panel edge,
+     and any non-visible overflow clips it — the menu becomes impossible
+     to reopen. Inner scrolling is handled by .sidebar-content itself. */
+  overflow: visible !important;
   background: var(--lecta-surface) !important;
   border-right: 1px solid var(--lecta-border) !important;
+}
+/* Make sure the collapse/reopen toggle is always visible and tappable */
+.gradio-container .sidebar .toggle-button {
+  opacity: 1 !important;
+  visibility: visible !important;
+  z-index: 1002 !important;
+  background: var(--lecta-surface-3) !important;
+  border: 1px solid var(--lecta-border) !important;
+  color: var(--lecta-text) !important;
 }
 /* Fix overlay: ensure content area doesn't get obscured */
 .gradio-container .contain > .wrap > .tabs, 
