@@ -32,47 +32,21 @@ gradio-app, .gradio-container {
   color: var(--lecta-text) !important;
 }
 .gradio-container {
+  width: 100% !important;
   max-width: 100% !important;
   margin: 0 auto !important;
   padding: 12px !important;
 }
-/* FIX: prevent sidebar from overlapping main content area */
-.gradio-container .main, .gradio-container .contain {
-  display: flex !important;
-  flex-wrap: nowrap !important;
-  gap: 16px !important;
-}
-/* Sidebar should not overflow into content */
-.gradio-container .sidebar, .gradio-container > .contain > .sidebar {
-  min-width: 240px !important;
-  max-width: 280px !important;
-  flex-shrink: 0 !important;
+/* Sidebar: Gradio 6 renders it as a FIXED overlay panel with its own
+   collapse toggle. It must stay out of the normal flex flow — forcing it
+   into the flow (position:relative + fixed width) squeezes the content
+   and leaves dead space when collapsed. Just skin the panel and let the
+   native collapse work: content automatically expands when it slides out. */
+.gradio-container .sidebar {
   overflow-y: auto !important;
   overflow-x: visible !important;
-  position: relative !important;
-  z-index: 1 !important;
-}
-/* Main content takes remaining space */
-.gradio-container .main > .wrap, .gradio-container > .contain > .wrap {
-  flex: 1 1 auto !important;
-  min-width: 0 !important;
-  overflow-x: hidden !important;
-}
-/* FIX: app must span the full window width — no dead space on the right */
-gradio-app, .gradio-container,
-.gradio-container .main, .gradio-container .contain,
-.gradio-container > .contain > .wrap, .gradio-container .main > .wrap {
-  width: 100% !important;
-  max-width: 100% !important;
-}
-.gradio-container .contain > .main { flex: 1 1 auto !important; min-width: 0 !important; }
-/* Whatever wrapper Gradio puts next to the sidebar must grow to fill the row */
-.gradio-container .main > *:not(.sidebar):not([class*="sidebar"]),
-.gradio-container .contain > *:not(.sidebar):not([class*="sidebar"]):not(.main) {
-  flex: 1 1 auto !important;
-  min-width: 0 !important;
-  max-width: 100% !important;
-  width: 100% !important;
+  background: var(--lecta-surface) !important;
+  border-right: 1px solid var(--lecta-border) !important;
 }
 /* Fix overlay: ensure content area doesn't get obscured */
 .gradio-container .contain > .wrap > .tabs, 
