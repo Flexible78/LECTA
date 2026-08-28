@@ -45,12 +45,12 @@ tree.txt
 # ---- secrets, never in git ----
 .env
 .env.*
-*secret*
-*token*
 oauth_creds.json
 credentials.json
 client_secret*.json
 thought_sigs.json
+*_api_keys.json
+api_keys.json
 *.pem
 *.key
 
