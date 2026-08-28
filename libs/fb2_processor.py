@@ -275,6 +275,7 @@ class FB2Processor:
         notes = self.extract_notes(root)
         sections = self.split_sections(body[0])
         total_sections = len(sections)
+        produced_files = set()
 
         for idx, section_dict in enumerate(sections, start=1):
             if self.stop_parsing:
@@ -338,6 +339,18 @@ class FB2Processor:
                 xml_path.mkdir(parents=True, exist_ok=True)
                 tree.write(str(xml_file), encoding="utf-8", pretty_print=True)
 
+            produced_files.add(xml_file.name)
             yield int((idx / total_sections) * 100), f"✅ Processed: {f_name}"
-            
+
+        # При replace=True удаляем устаревшие XML, которых больше нет в книге
+        # (иначе старые секции останутся и попадут в озвучку)
+        if replace:
+            for stale in xml_path.glob("*.xml"):
+                if stale.name not in produced_files:
+                    try:
+                        stale.unlink()
+                        logger.info(f"🗑 Removed stale XML: {stale.name}")
+                    except Exception:
+                        pass
+
         yield 100, "🎉 Done"

@@ -389,6 +389,9 @@ def tts(
             xml_files = list(xml_path.glob("*.xml"))
             if not xml_files or fb2_mtime > max(f.stat().st_mtime for f in xml_files):
                 need_parse = True
+        # Overwrite mode: всегда перепарсиваем FB2 → XML, а не только когда XML отсутствует/устарел
+        if repl and fb2_file.exists():
+            need_parse = True
         if need_parse and fb2_file.exists():
             try:
                 fresh_config = AppConfig.load_user_settings()
@@ -431,6 +434,45 @@ def tts(
     last_final_mp3_path = ""
 
     files = [x.stem for x in xml_path.glob("*.xml")]
+
+    # Overwrite mode: удаляем MP3 со старыми именами (например, усечёнными),
+    # которых больше нет в текущем наборе — чтобы не оставались «старые файлы».
+    if repl:
+        expected_names = {
+            f"{ab_path}.mp3" if len(files) == 1 else f"{_short_name(f)}.mp3"
+            for f in files
+        }
+        expected_stems = {Path(n).stem for n in expected_names}
+        for old_mp3 in mp3_path.glob("*.mp3"):
+            if old_mp3.name not in expected_names:
+                try:
+                    old_mp3.unlink()
+                    logger.info(f"🗑 Removed stale MP3: {old_mp3.name}")
+                except Exception:
+                    pass
+        # Чистим устаревшие записи в карте моделей и таймингах
+        model_map = _load_model_map(ab_path)
+        if model_map:
+            removed_keys = [k for k in model_map if k not in expected_stems]
+            if removed_keys:
+                for k in removed_keys:
+                    model_map.pop(k, None)
+                try:
+                    map_path_j = data_path / ab_path / _MODEL_MAP_FILE
+                    with open(map_path_j, "w", encoding="utf-8") as f:
+                        json.dump(model_map, f, ensure_ascii=False)
+                except Exception:
+                    pass
+        pt_file = work_dir / "parse_times.json"
+        if pt_file.exists():
+            try:
+                with open(pt_file, "r", encoding="utf-8") as f:
+                    pt = json.load(f)
+                if any(k not in expected_stems for k in pt):
+                    with open(pt_file, "w", encoding="utf-8") as f:
+                        json.dump({k: v for k, v in pt.items() if k in expected_stems}, f, ensure_ascii=False)
+            except Exception:
+                pass
 
     # --- Считаем общее количество строк для точного прогресс-бара ---
     total_lines = 0
@@ -508,10 +550,12 @@ def tts(
     for file in sorted(files, key=safe_sort):
         if is_single_file:
             final_name = ab_path
+            # Имя проекта НЕ усекаем — MP3 должен называться ровно как проект
+            short_final = final_name
         else:
             final_name = file
-        # Короткое имя файла (до ~20 символов) для аккуратного листинга
-        short_final = _short_name(final_name)
+            # Короткое имя файла (до ~20 символов) для аккуратного листинга
+            short_final = _short_name(final_name)
 
         mp3_file = mp3_path / f"{short_final}.mp3"
         partial_mp3_file = mp3_path / f"{short_final}_PARTIAL.mp3"
@@ -1101,11 +1145,82 @@ def create_selected_zip_archive(ab_path, selected_filenames, file_index):
 # ── ХЕЛПЕРЫ ДЛЯ ФИКСА B: чекбоксы, массовые операции ──
 
 def get_file_checkbox_choices(ab_name, df_output=None):
-    """Возвращает список имён mp3-файлов для CheckboxGroup (со сбросом выбора)."""
+    """Возвращает список имён mp3-файлов для CheckboxGroup (со сбросом выбора).
+    Подпись всегда показывает, файлы КАКОГО проекта перечислены — чтобы не
+    путать со списком проектов batch TTS слева."""
+    label = f"MP3 files of project: {ab_name or '(no project selected)'}"
+    # Безопасно резолвим имена из df_output: файлы из ДРУГИХ проектов (batch TTS)
+    # показываем с префиксом проекта, но в чекбоксы берём только файлы текущего проекта.
+    choices = []
     if df_output is not None:
-        return gr.update(choices=[row[0] for row in df_output], value=[])
-    files = get_files_list(ab_name)
-    return gr.update(choices=[row[0] for row in files], value=[])
+        mp3_dir = data_path / str(ab_name) / "mp3" if ab_name else None
+        for row in df_output:
+            if not row or not row[0]:
+                continue
+            name = str(row[0])
+            if " | " in name:
+                # вид "project | file.mp3" из batch TTS
+                if name.startswith(f"{ab_name} | "):
+                    choices.append(name.split(" | ", 1)[1])
+            elif mp3_dir is not None and (mp3_dir / name).exists():
+                choices.append(name)
+    else:
+        files = get_files_list(ab_name)
+        choices = [row[0] for row in files]
+    # Убираем дубли, сохраняя порядок
+    seen = set()
+    uniq = []
+    for c in choices:
+        if c not in seen:
+            seen.add(c)
+            uniq.append(c)
+    return gr.update(choices=uniq, value=[], label=label)
+
+
+def delete_all_project_files(ab_name, confirm_state, df_output):
+    """Удаляет ВСЕ mp3-файлы текущего проекта с диска.
+    Двухкликовое подтверждение: первый клик — предупреждение, второй — удаление."""
+    if not ab_name:
+        gr.Warning("No project selected!")
+        return df_output, gr.update(), "idle", gr.update(), {}
+
+    if confirm_state != "confirm":
+        files = get_files_list(ab_name)
+        gr.Warning(f"⚠️ Will delete ALL {len(files)} MP3 files of project '{ab_name}'. Click again to confirm.")
+        return (
+            df_output,
+            gr.update(value=f"⚠️ Confirm: delete ALL {len(files)} files"),
+            "confirm",
+            gr.update(),
+            {},
+        )
+
+    # Второй клик — удаление
+    mp3_dir = data_path / ab_name / "mp3"
+    deleted = 0
+    if mp3_dir.exists():
+        for file_path in list(mp3_dir.glob("*.mp3")):
+            try:
+                file_path.unlink()
+                deleted += 1
+            except Exception as e:
+                gr.Warning(f"Delete error {file_path.name}: {e}")
+    # Чистим карту моделей проекта
+    try:
+        map_path_j = data_path / ab_name / _MODEL_MAP_FILE
+        if map_path_j.exists():
+            map_path_j.unlink()
+    except Exception:
+        pass
+
+    gr.Info(f"🗑 Deleted all {deleted} MP3 files of project '{ab_name}'")
+    return (
+        [],
+        gr.update(value="🗑 Delete ALL project files"),
+        "idle",
+        gr.update(choices=[], value=[]),
+        {},
+    )
 
 
 def select_all_files(ab_name, df_output=None):
@@ -1366,6 +1481,8 @@ def launch_background_job(
     use_accents=None,
     repl=None,
     selected_projects=None,
+    auto_open=None,
+    sound_done=None,
 ):
     """Запускает фоновый воркер (полный цикл: парсинг + TTS + пакет).
     Возвращает строку-статус для лога. Процесс отвязан от GUI — его можно закрыть.
@@ -1424,7 +1541,9 @@ def launch_background_job(
             "use_edge_he": router.USE_EDGE_FOR_HEBREW,
             "use_edge_ru": router.USE_EDGE_FOR_RUSSIAN,
             "dict_mode": router.DICTIONARY_MODE,
+            "auto_open": True if auto_open is None else bool(auto_open),
         },
+        "sound_done": True if sound_done is None else bool(sound_done),
         "status_file": str(_bg_status_path()),
         "log_file": str(_bg_log_path()),
     }
@@ -1468,11 +1587,13 @@ def launch_background_job(
     except Exception as e:
         raise gr.Error(f"Background launch failed: {e}")
 
+    will_open = " and opened in Explorer." if (auto_open is None or auto_open) else "."
     return (
         f"⚡ Background job started for {len(projects)} project(s): "
         + ", ".join(projects)
         + ". You can close the GUI and the browser — processing continues. "
-        "The 3-file package will be saved next to the source and opened in Explorer."
+        "The 3-file package will be saved next to the source"
+        + will_open
     )
 
 
@@ -1521,6 +1642,7 @@ def batch_tts_all_projects(
     use_accents,
     repl,
     selected_projects=None,
+    auto_open=True,
 ):
     """Пакетная озвучка выбранных проектов.
     Если selected_projects не указан или пуст — берутся все проекты."""
@@ -1657,8 +1779,9 @@ def batch_tts_all_projects(
             yield (all_files, f"⚠️ [{idx}/{total}] {project}: skipped — no XML/FB2/TXT", gr.update(), gr.update(), batch_file_index)
             continue
 
-        # Авто-парсинг FB2 если XML ещё нет
-        if not has_xml:
+        # Авто-парсинг FB2 если XML ещё нет, либо включён Overwrite (repl) и есть FB2
+        need_parse = (not has_xml) or (repl and fb2_file.exists())
+        if need_parse:
             batch_pre_pct = int((idx - 1) / total * 100)
             elapsed = time.monotonic() - global_start
             speed = idx / elapsed if elapsed > 0 else 0
@@ -1923,6 +2046,11 @@ def batch_tts_all_projects(
     final_html = summary_table + "\n" + final_bars if summary_table else final_bars
 
     _synthesis_completed = True
+    # 📂 Автооткрытие папки с готовыми MP3 (по чекбоксу)
+    if auto_open and all_projects:
+        opened = open_folder_locally(data_path / all_projects[-1] / "mp3")
+        if opened:
+            logger.info("Opened MP3 folder: %s", data_path / all_projects[-1] / "mp3")
     gr.Info("Done")
     yield (
         all_files,
@@ -1931,6 +2059,23 @@ def batch_tts_all_projects(
         _safe_audio(last_final_mp3_path),
         batch_file_index,
     )
+
+
+def open_folder_locally(path) -> bool:
+    """Открывает папку в системном файл-менеджере (локальный запуск GUI).
+    Возвращает True при успехе."""
+    try:
+        p = Path(path)
+        if not p.is_dir():
+            return False
+        if sys.platform == "win32":
+            os.startfile(str(p))  # type: ignore[attr-defined]
+        else:
+            import subprocess
+            subprocess.Popen(["xdg-open", str(p)])
+        return True
+    except Exception:
+        return False
 
 
 def _safe_audio(p):
@@ -1944,8 +2089,15 @@ def _safe_audio(p):
 
 
 def _play_completion_sound():
-    """Гарантированно проигрывает ЛЮБОЙ доступный звук завершения (base64 data-URI)."""
+    """Гарантированно проигрывает ЛЮБОЙ доступный звук завершения (base64 data-URI).
+    🔇 Отключается чекбоксом (настройка sound_done)."""
     import base64, time
+    try:
+        _cfg = AppConfig.load_user_settings()
+        if not getattr(_cfg, "sound_done", True):
+            return gr.update(value="")
+    except Exception:
+        pass
     events_dir = sound_dir / "events"
     wav = None
     try:
@@ -1998,8 +2150,40 @@ def change_tts_model(mver):
 def tts_tab(ab_path, tts_state):
     with gr.Tab(label="🎧 TTS", id=2) as tts_tab_ui:
         with gr.Row():
-            # ── LEFT COLUMN: TTS controls, progress, log ──
+            # ── LEFT COLUMN: batch TTS block on top, then TTS controls ──
             with gr.Column(scale=5, min_width=320):
+                # ── Batch TTS block (pinned to top) ──
+                with gr.Row():
+                    batch_project_sel = gr.CheckboxGroup(
+                        choices=sorted(get_data_list()),
+                        label="Select projects for batch TTS (empty = all)",
+                        interactive=True, elem_id="batch_project_sel",
+                    )
+                with gr.Row():
+                    select_all_btn = gr.Button("Select all", size="sm", scale=1)
+                    deselect_all_btn = gr.Button("Deselect all", size="sm", scale=1)
+
+                with gr.Row():
+                    bg_run_btn = gr.Button(
+                        "⚡ Run in background (close GUI OK)",
+                        variant="secondary",
+                        size="sm",
+                        elem_id="bg_run_btn",
+                    )
+                bg_status_html = gr.HTML(
+                    value="<div style='color:#94a3b8;font-size:13px;'>Background: no job</div>"
+                )
+                bg_timer = gr.Timer(2, active=True)
+
+                metrics_panel = gr.HTML(
+                    value=get_metrics_html(0, "00:00", "00:00", "0.0 lines/s")
+                )
+                with gr.Group(elem_id="log_group"):
+                    output_log = gr.Textbox(
+                        label="Live TTS log", lines=3, max_lines=3,
+                        interactive=False, value="Waiting to start...",
+                    )
+
                 with gr.Row():
                     try:
                         fresh_config = AppConfig.load_user_settings()
@@ -2040,41 +2224,17 @@ def tts_tab(ab_path, tts_state):
                             use_sound_effect = gr.Checkbox(label="Audio effects", value=False)
                             repl = gr.Checkbox(label="Overwrite existing MP3", value=True)
                             use_accents = gr.Checkbox(label="Add stress marks (RU)", value=True)
+                        auto_open_cb = gr.Checkbox(label="📂 Auto-open folder when done (MP3 in Explorer)", value=True)
+                        try:
+                            _sd_cfg = AppConfig.load_user_settings()
+                            _sound_done_default = bool(getattr(_sd_cfg, "sound_done", True))
+                        except Exception:
+                            _sound_done_default = True
+                        sound_done_cb = gr.Checkbox(label="🔊 Sound signal when done", value=_sound_done_default)
                     with gr.Column(scale=1, min_width=150):
                         tts_button = gr.Button("TTS (Ctrl+Enter)", elem_id="tts_btn", variant="primary", size="sm")
                         batch_tts_btn = gr.Button("Batch TTS (selected)", variant="primary", size="sm", elem_id="batch_tts_btn")
                         stop_btn = gr.Button("Stop", variant="stop", size="sm")
-
-                with gr.Row():
-                    batch_project_sel = gr.CheckboxGroup(
-                        choices=sorted(get_data_list()),
-                        label="Select projects for batch TTS (empty = all)",
-                        interactive=True, elem_id="batch_project_sel",
-                    )
-                with gr.Row():
-                    select_all_btn = gr.Button("Select all", size="sm", scale=1)
-                    deselect_all_btn = gr.Button("Deselect all", size="sm", scale=1)
-
-                with gr.Row():
-                    bg_run_btn = gr.Button(
-                        "⚡ Run in background (close GUI OK)",
-                        variant="secondary",
-                        size="sm",
-                        elem_id="bg_run_btn",
-                    )
-                bg_status_html = gr.HTML(
-                    value="<div style='color:#94a3b8;font-size:13px;'>Background: no job</div>"
-                )
-                bg_timer = gr.Timer(2, active=True)
-
-                metrics_panel = gr.HTML(
-                    value=get_metrics_html(0, "00:00", "00:00", "0.0 lines/s")
-                )
-                with gr.Group(elem_id="log_group"):
-                    output_log = gr.Textbox(
-                        label="Live TTS log", lines=3, max_lines=3,
-                        interactive=False, value="Waiting to start...",
-                    )
 
             # ── RIGHT COLUMN: file table, player, buttons ──
             with gr.Column(scale=4, min_width=360):
@@ -2083,6 +2243,7 @@ def tts_tab(ab_path, tts_state):
 
                 df_output = gr.DataFrame(
                     headers=["File name", "Model", "Size", "Dur.", "Proc."],
+                    label="MP3 files of the selected project",
                     interactive=False,
                     datatype=["str", "str", "str", "str", "str"],
                     column_widths=["200px", "80px", "60px", "60px", "60px"],
@@ -2117,7 +2278,13 @@ def tts_tab(ab_path, tts_state):
                     del_selected_btn = gr.Button("Delete selected", size="sm", variant="stop")
                 dl_selected_output = gr.DownloadButton(visible=False, size="sm")
 
+                del_all_files_btn = gr.Button(
+                    "🗑 Delete ALL project files", variant="stop", size="sm",
+                    elem_id="del_all_files_btn",
+                )
+
                 del_confirm_state = gr.State("idle")
+                del_all_confirm_state = gr.State("idle")
 
     download_btn.click(
         fn=lambda: gr.DownloadButton(visible=False), outputs=download_btn
@@ -2171,6 +2338,13 @@ def tts_tab(ab_path, tts_state):
         fn=delete_selected_files,
         inputs=[file_checkboxes, ab_path, del_confirm_state, batch_file_index_state, df_output],
         outputs=[df_output, del_selected_btn, del_confirm_state, file_checkboxes, batch_file_index_state],
+    )
+
+    # ── Удаление ВСЕХ файлов проекта (двухкликовое подтверждение) ──
+    del_all_files_btn.click(
+        fn=delete_all_project_files,
+        inputs=[ab_path, del_all_confirm_state, df_output],
+        outputs=[df_output, del_all_files_btn, del_all_confirm_state, file_checkboxes, batch_file_index_state],
     )
 
     tts_button.click(
@@ -2235,6 +2409,7 @@ def tts_tab(ab_path, tts_state):
             use_accents,
             repl,
             batch_project_sel,
+            auto_open_cb,
         ],
         outputs=[df_output, output_log, metrics_panel, audio_player, batch_file_index_state],
     ).then(
@@ -2262,9 +2437,12 @@ def tts_tab(ab_path, tts_state):
             use_accents,
             repl,
             batch_project_sel,
+            auto_open_cb,
+            sound_done_cb,
         ],
         outputs=output_log,
-    ).then(
+    )
+    sound_done_cb.change(lambda v: AppConfig.save_user_settings({"sound_done": bool(v)}), inputs=sound_done_cb, outputs=[]).then(
         fn=read_bg_status,
         outputs=bg_status_html,
     )

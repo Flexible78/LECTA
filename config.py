@@ -68,6 +68,7 @@ class AppConfig:
     use_edge_hebrew: bool = True
     dict_mode: bool = False
     completion_sound: str = "complete.wav"
+    sound_done: bool = True  # 🔊 звуковой сигнал по завершению (отключаемый)
 
     @staticmethod
     def parse_args():

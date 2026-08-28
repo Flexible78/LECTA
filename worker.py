@@ -296,6 +296,19 @@ def open_in_explorer(path: Path):
         logger.error("Explorer open error: %s", e)
 
 
+def play_done_sound():
+    """🔊 Короткий системный сигнал завершения (работает и в detached-режиме)."""
+    try:
+        if sys.platform == "win32":
+            import winsound
+
+            winsound.MessageBeep(winsound.MB_ICONASTERISK)
+        else:
+            print("\a", end="", flush=True)
+    except Exception as e:
+        logger.error("Done sound error: %s", e)
+
+
 # ═══ MAIN ═══
 def main():
     global STATUS_FILE
@@ -373,9 +386,19 @@ def main():
         )
         logger.info("Worker finished: %d package(s)", len(packaged))
 
-        # Open Explorer — even if the GUI is already closed
-        for d in packaged:
-            open_in_explorer(d)
+        # Open Explorer (if auto_open checkbox is enabled) — even if the GUI is already closed
+        auto_open = bool(tts_cfg.get("auto_open", True))
+        if auto_open:
+            for d in packaged:
+                open_in_explorer(d)
+        else:
+            logger.info("Auto-open disabled by checkbox — skipping Explorer")
+
+        # 🔊 Звуковой сигнал завершения (отключаемый чекбоксом)
+        if bool(job.get("sound_done", True)):
+            play_done_sound()
+        else:
+            logger.info("Sound signal disabled by checkbox")
         return 0
     except Exception as e:
         logger.error("FATAL: %s", e, exc_info=True)

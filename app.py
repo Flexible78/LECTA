@@ -19,6 +19,7 @@ import sys
 import logging
 import inspect
 import numpy as np
+import pandas as pd
 import threading
 import webbrowser
 import subprocess
@@ -189,50 +190,219 @@ def _extract_file_path(file_obj):
         return file_obj.name
     return str(file_obj)
 
-def process_file_wrapper(manual_path, drop_files, remove_ru, bg_mode=False):
-    """ГЕНЕРАТОР: загружает файлы → создаёт FB2 → парсит с прогресс-баром.
-    Каждый yield обновляет: dropdown проектов + прогресс + статус.
+def _norm_key(p: str) -> str:
+    """Normalized key for path dedup (case-insensitive on Windows)."""
+    return os.path.normcase(os.path.normpath(p))
+
+def _human_size(num) -> str:
+    """Human-readable file size."""
+    try:
+        n = float(num)
+    except Exception:
+        return "—"
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n:.1f} GB"
+
+def _dedup_append(existing: list, new_paths):
+    """Append new paths to the queue list, skipping duplicates. Returns (new_list, added_list)."""
+    seen = {_norm_key(p) for p in existing}
+    added = []
+    for p in new_paths or []:
+        p = (p or "").strip().strip('"').strip("'")
+        if not p:
+            continue
+        key = _norm_key(p)
+        if key in seen:
+            continue
+        seen.add(key)
+        added.append(p)
+    return list(existing) + added, added
+
+def _status_bg(status: str) -> str:
+    """Цвет фона строки очереди по статусу (тёмная тема)."""
+    s = (status or "").strip()
+    if s.startswith("❌") or s.startswith("⚠️"):
+        return "rgba(244,63,94,0.30)"    # красный — ошибка
+    if s.startswith("🔊"):
+        return "rgba(56,189,248,0.22)"   # голубой — идёт озвучка
+    if s.startswith("⏳"):
+        return "rgba(245,158,11,0.26)"   # янтарный — в работе
+    if s.startswith("✅"):
+        return "rgba(16,185,129,0.26)"   # зелёный — готово
+    return "rgba(148,163,184,0.10)"      # серый — ожидание
+
+def _queue_styler(rows):
+    """pandas Styler с подсветкой строк очереди по статусу."""
+    df = pd.DataFrame(rows, columns=["File", "Size", "Status", "Path"])
+    if df.empty:
+        return df
+    def _paint(row):
+        color = _status_bg(row["Status"])
+        return [f"background-color: {color}"] * len(df.columns)
+    try:
+        return df.style.apply(_paint, axis=1)
+    except Exception:
+        return df
+
+def _play_done_sound():
+    """🔊 Короткий системный сигнал по завершению (отключается чекбоксом)."""
+    try:
+        if sys.platform == "win32":
+            import winsound
+            winsound.MessageBeep(winsound.MB_ICONASTERISK)
+        else:
+            print("\a", end="", flush=True)
+    except Exception:
+        pass
+
+def _queue_counter_html(n: int) -> str:
+    """Яркий счётчик добавленных файлов (обновляется при каждом изменении очереди)."""
+    return (
+        "<div style='padding:6px 12px;border-radius:8px;background:#1e293b;border:1px solid #334155;"
+        "text-align:center;font-size:13px;color:#38bdf8;'>"
+        f"📁 Added files: <b style='color:#ffffff;font-size:15px;'>{n}</b></div>"
+    )
+
+def _queue_df_update(paths):
+    """Render the queue table (rows + label with counter) from a list of paths."""
+    rows = []
+    for p in paths:
+        exists = os.path.exists(p)
+        rows.append([
+            Path(p).name,
+            _human_size(os.path.getsize(p)) if exists else "⚠️ missing",
+            "⏳ pending",
+            str(p),
+        ])
+    return gr.update(value=_queue_styler(rows), label=f"📁 Queue ({len(paths)} files)")
+
+def _remaining_queue_update(failed_paths, errors):
+    """Queue table after the run: only failed files remain, with the error text visible."""
+    err_by_name = {}
+    for e in errors or []:
+        name, _, msg = e.partition(": ")
+        err_by_name[name] = msg
+    rows = []
+    for p in failed_paths:
+        err_txt = str(err_by_name.get(Path(p).name, "error"))
+        exists = os.path.exists(p)
+        rows.append([
+            Path(p).name,
+            _human_size(os.path.getsize(p)) if exists else "⚠️ missing",
+            f"❌ {err_txt[:60]}",
+            str(p),
+        ])
+    return gr.update(value=_queue_styler(rows), label=f"📁 Queue ({len(failed_paths)} files)")
+
+def queue_add_clipboard(paths_list):
+    """📋 Add from clipboard: ADD paths to the queue (does not replace old ones)."""
+    raw = read_clipboard_path()
+    if not raw:
+        gr.Warning("No file paths found in clipboard!")
+        return gr.update(), paths_list, None
+    new_list, added = _dedup_append(paths_list, raw.split('\n'))
+    if added:
+        gr.Info(f"➕ Added {added} file(s) to the queue", duration=3)
+    else:
+        gr.Info("ℹ️ All clipboard files are already in the queue", duration=3)
+    return _queue_counter_html(len(new_list)), _queue_df_update(new_list), new_list, None
+
+def queue_add_dropped(paths_list, drop_files):
+    """Drag&drop: ADD dropped files to the queue and clear the drop zone,
+    so the user can drop the next batch right away."""
+    files = drop_files if isinstance(drop_files, list) else ([drop_files] if drop_files else [])
+    paths = []
+    for f in files:
+        fp = _extract_file_path(f)
+        if fp and os.path.exists(fp):
+            paths.append(fp)
+    if not paths:
+        return gr.update(), paths_list, None
+    new_list, added = _dedup_append(paths_list, paths)
+    gr.Info(f"➕ Added {added} file(s) to the queue", duration=3)
+    return _queue_counter_html(len(new_list)), _queue_df_update(new_list), new_list, gr.update(value=None)
+
+def queue_select_row(data: gr.SelectData):
+    """Remember the row selected in the queue table."""
+    try:
+        return int(data.index[0])
+    except Exception:
+        return None
+
+def queue_remove_selected(paths_list, sel):
+    """➖ Remove the selected row from the queue."""
+    if sel is None or not isinstance(sel, int) or not (0 <= sel < len(paths_list)):
+        gr.Warning("Select a file in the queue table first!")
+        return gr.update(), paths_list, None
+    new_list = list(paths_list)
+    removed = new_list.pop(sel)
+    gr.Info(f"➖ Removed: {Path(removed).name}", duration=2)
+    return _queue_counter_html(len(new_list)), _queue_df_update(new_list), new_list, None
+
+def queue_clear_all():
+    """🗑 Clear the whole file queue."""
+    return _queue_counter_html(0), _queue_df_update([]), [], None, gr.update(value=None)
+
+def process_file_wrapper(queue_paths, drop_files, remove_ru, bg_mode=False, auto_open=True, sound_done=True):
+    """ГЕНЕРАТОР: берёт файлы из ОЧЕРЕДИ (queue_paths + drop_files) → создаёт FB2 →
+    парсит с прогресс-баром. Каждый yield обновляет: dropdown проектов + прогресс + статус
+    + таблицу очереди (живой статус каждого файла: ⏳ → ✅/❌ → 🔊 %).
+    Успешные файлы удаляются из очереди, проблемные остаются с текстом ошибки.
     Если bg_mode=True — после конвертации в FB2 запускает ПОЛНЫЙ цикл
     (парсинг + озвучка + пакет из 3 файлов) в фоновом воркере, который
     переживает закрытие GUI/браузера."""
-    # ── Шаг 1: Сбор путей ──
-    file_paths = []
-    if manual_path and manual_path.strip():
-        raw_paths = re.split(r'[\n|]+', manual_path)
-        for p in raw_paths:
-            p = p.strip().strip('"').strip("'")
-            if p and os.path.exists(p):
-                file_paths.append(p)
+    # ── Шаг 1: Сбор путей из очереди ──
+    file_paths = list(queue_paths or [])
     if drop_files is not None:
-        if isinstance(drop_files, list):
-            for f in drop_files:
-                fp = _extract_file_path(f)
-                if fp and os.path.exists(fp) and fp not in file_paths:
-                    file_paths.append(fp)
-        else:
-            fp = _extract_file_path(drop_files)
-            if fp and os.path.exists(fp) and fp not in file_paths:
+        files = drop_files if isinstance(drop_files, list) else [drop_files]
+        for f in files:
+            fp = _extract_file_path(f)
+            if fp and os.path.exists(fp) and not any(_norm_key(fp) == _norm_key(x) for x in file_paths):
                 file_paths.append(fp)
     if not file_paths:
-        yield gr.update(), gr.update(), "", ""
+        gr.Warning("Queue is empty — add files via clipboard or drag&drop first!")
+        yield gr.update(), gr.update(), "", "", gr.update(), gr.update(), _queue_counter_html(0), gr.update()
         return
+
+    # Живые статусы для таблицы очереди (по одному на файл)
+    statuses = ["⏳ pending"] * len(file_paths)
+
+    def df_update():
+        """Собирает gr.update для таблицы очереди из текущих путей/статусов."""
+        rows = []
+        for p, st in zip(file_paths, statuses):
+            exists = os.path.exists(p)
+            rows.append([Path(p).name, _human_size(os.path.getsize(p)) if exists else "⚠️ missing", st, str(p)])
+        return gr.update(value=_queue_styler(rows), label=f"📁 Queue ({len(file_paths)} files)")
     
     # ── Шаг 2: Конвертация в FB2 (быстро, без парсинга) ──
-    processed = []
+    processed = []       # имена созданных проектов
+    processed_idx = []   # индексы успешных файлов в file_paths
     errors = []
+    failed_paths = []    # пути, которые ОСТАЮТСЯ в очереди
     for i, fp in enumerate(file_paths, 1):
         fname = Path(fp).name
+        statuses[i - 1] = f"⏳ converting [{i}/{len(file_paths)}]"
+        yield gr.update(), gr.update(), gr.update(), f"📦 [{i}/{len(file_paths)}] Converting: {fname}", gr.update(), df_update(), _queue_counter_html(len(file_paths)), gr.update()
         gr.Info(f"[{i}/{len(file_paths)}] Loading: {fname}...", duration=2)
         ab_name, error_msg = parse_and_save_document(fp, remove_ru)
         if error_msg:
             errors.append(f"{fname}: {error_msg}")
+            failed_paths.append(fp)
+            statuses[i - 1] = f"❌ {str(error_msg)[:60]}"
         else:
             processed.append(ab_name)
+            processed_idx.append(i - 1)
+            statuses[i - 1] = "✅ converted"
     if errors:
         for err in errors:
             gr.Warning(err)
     if not processed:
-        yield gr.update(), gr.update(), "", ""
+        # Ничего не сконвертировано — очередь остаётся (❌ видны в таблице, можно повторить)
+        yield gr.update(), gr.update(), "", "", gr.update(), df_update(), _queue_counter_html(len(failed_paths)), gr.update()
         return
     
     first_ab = processed[0]
@@ -243,15 +413,15 @@ def process_file_wrapper(manual_path, drop_files, remove_ru, bg_mode=False):
     if bg_mode:
         try:
             from gr_tabs.tts_tab import launch_background_job
-            msg = launch_background_job(None, selected_projects=processed)
-            yield drop_update, drop_update, "", f"🎉 {msg}"
+            msg = launch_background_job(None, selected_projects=processed, auto_open=auto_open, sound_done=sound_done)
+            yield drop_update, drop_update, "", f"🎉 {msg}", failed_paths, _remaining_queue_update(failed_paths, errors), _queue_counter_html(len(failed_paths)), gr.update(value=None)
             return
         except Exception as e:
             logger.warning(f"⚠️ Background launch failed, falling back to inline parse: {e}")
             # fallback — парсим как обычно
     
     # ── Первый yield: обновляем dropdown + показываем начало прогресса ──
-    yield drop_update, drop_update, get_upload_progress_html(0, 0, total, "Starting..."), f"📦 Loaded {total} projects. Starting parse..."
+    yield drop_update, drop_update, get_upload_progress_html(0, 0, total, "Starting..."), f"📦 Loaded {total} projects. Starting parse...", gr.update(), df_update(), _queue_counter_html(len(file_paths)), gr.update()
     
     # ── Шаг 3: Парсинг каждого проекта с живым прогрессом ──
     # Читаем сохранённые настройки парсинга
@@ -265,6 +435,7 @@ def process_file_wrapper(manual_path, drop_files, remove_ru, bg_mode=False):
         ps_ch_size, ps_punctuation, ps_translit, ps_sound_effect = 200, False, True, False
     
     for i, ab_name in enumerate(processed):
+        orig_i = processed_idx[i]
         try:
             proc = FB2Processor()
             for pct, msg in proc.process_book(
@@ -275,25 +446,35 @@ def process_file_wrapper(manual_path, drop_files, remove_ru, bg_mode=False):
                 ch_size=ps_ch_size
             ):
                 overall_pct = int((i + pct / 100) / total * 100)
+                statuses[orig_i] = f"🔊 {int(pct)}%"
                 yield (
                     gr.update(), gr.update(),
                     get_upload_progress_html(overall_pct, i + 1, total, f"{ab_name}: {msg}"),
-                    f"📄 [{i+1}/{total}] Parsing: {ab_name} — {msg}"
+                    f"📄 [{i+1}/{total}] Parsing: {ab_name} — {msg}",
+                    gr.update(), df_update(), gr.update(), gr.update()
                 )
         except Exception as e:
             logger.warning(f"⚠️ Auto-parse error {ab_name}: {e}")
+            statuses[orig_i] = "⚠️ parse error"
             yield (
                 gr.update(), gr.update(),
-                get_upload_progress_html(int((i+1)/total*100), i+1, total, f"⚠️ Error: {ab_name}"),
-                f"⚠️ [{i+1}/{total}] Parse error {ab_name}: {e}"
+                get_upload_progress_html(int((i+1)/total*100), i + 1, total, f"⚠️ Error: {ab_name}"),
+                f"⚠️ [{i+1}/{total}] Parse error {ab_name}: {e}",
+                gr.update(), df_update(), gr.update(), gr.update()
             )
     
     # ── Финальный yield: скрываем прогресс-бар ──
     gr.Info(f"✅ Loaded and parsed: {total} projects", duration=5)
+    if sound_done:
+        _play_done_sound()
     yield (
         gr.update(), gr.update(),
         "",  # сбрасываем прогресс-бар
-        f"🎉 All {total} projects parsed! Ready for TTS."
+        f"🎉 All {total} projects parsed! Ready for TTS.",
+        failed_paths,  # из очереди уходят только проблемные файлы
+        _remaining_queue_update(failed_paths, errors),
+        _queue_counter_html(len(failed_paths)),
+        gr.update(value=None)      # очищаем зону drag&drop
     )
 
 def clean_srt_timings(text):
@@ -409,6 +590,10 @@ div[data-testid="file-name"], span[data-testid="file-name"], .file-name, .file-p
 .uniform-row { align-items: flex-end !important; }
 .fixed-height-btn { height: 42px !important; display: flex; align-items: center; justify-content: center; font-weight: bold !important; }
 
+/* ОЧЕРЕДЬ ФАЙЛОВ: компактная наглядная таблица */
+#file_queue_table { font-size: 12px !important; }
+#file_queue_table td, #file_queue_table th { padding: 3px 8px !important; font-size: 12px !important; }
+
 /* УБИВАЕМ УРОДЛИВЫЕ СКРОЛЛБАРЫ ИЗ ТЕКСТОВЫХ СТАТУСОВ */
 textarea[readonly] { overflow-y: hidden !important; resize: none !important; }
 
@@ -522,12 +707,43 @@ with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew")
                 with gr.Column(scale=1):
                     with gr.Group(elem_classes="block-card"):
                         with gr.Row(elem_classes=["uniform-row"]):
-                            paste_file_btn = gr.Button("📋 From clipboard", variant="primary", elem_classes=["fixed-height-btn"], scale=1)
-                            manual_file_input = gr.Textbox(label="File paths (one per line)", lines=2, scale=4, placeholder="C:\\books\\book1.fb2\nC:\\books\\book2.pdf")
-                        upload_text_file = gr.File(label="Or drag files here: PDF, DOCX, EPUB, RTF, HTML, FB2, ZIP...", file_count="multiple", height=100)
+                            paste_file_btn = gr.Button("📋 Add from clipboard", variant="primary", elem_classes=["fixed-height-btn"], scale=1)
+                        file_queue_state = gr.State([])      # список полных путей в очереди
+                        selected_queue_row = gr.State(None)  # выбранная строка таблицы
+                        queue_counter = gr.HTML(value=_queue_counter_html(0))
+                        queue_table = gr.Dataframe(
+                            headers=["File", "Size", "Status", "Path"],
+                            datatype=["str", "str", "str", "str"],
+                            value=[],
+                            interactive=False,
+                            label="📁 Queue (0 files)",
+                            max_height=200,
+                            type="array",
+                            wrap=True,
+                            elem_id="file_queue_table",
+                        )
+                        with gr.Row():
+                            queue_remove_btn = gr.Button("➖ Remove selected", variant="secondary")
+                            clear_queue_btn = gr.Button("🗑 Clear queue", variant="secondary")
+                        upload_text_file = gr.File(label="➕ Drag files here to ADD to the queue: PDF, DOCX, EPUB, RTF, HTML, FB2, ZIP... (add several times)", file_count="multiple", height=100)
                         bg_mode_cb = gr.Checkbox(
                             label="⚡ Background mode (parse + TTS + 3-file package, close GUI OK)",
                             value=False,
+                            interactive=True,
+                        )
+                        auto_open_upload_cb = gr.Checkbox(
+                            label="📂 Auto-open folder when done (MP3 package in Explorer)",
+                            value=True,
+                            interactive=True,
+                        )
+                        try:
+                            _saved_cfg = AppConfig.load_user_settings()
+                            _sound_done_default = bool(getattr(_saved_cfg, "sound_done", True))
+                        except Exception:
+                            _sound_done_default = True
+                        sound_done_upload_cb = gr.Checkbox(
+                            label="🔊 Sound signal when done",
+                            value=_sound_done_default,
                             interactive=True,
                         )
                         process_file_btn = gr.Button("⬇️ Upload file(s)", variant="primary")
@@ -765,14 +981,21 @@ with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew")
     restart_btn.click(fn=restart_app, js=js_restart)
     quit_btn.click(fn=stop_app, js=js_exit)
 
-    paste_file_btn.click(fn=read_clipboard_path, outputs=manual_file_input)
+    # ── Очередь файлов: добавить (клипборд / drag&drop), убрать выбранное, очистить ──
+    paste_file_btn.click(fn=queue_add_clipboard, inputs=[file_queue_state], outputs=[queue_counter, queue_table, file_queue_state, selected_queue_row])
+    # Drag&drop добавляет файлы В КОНЕЦ очереди и очищает зону для следующей партии
+    upload_text_file.upload(fn=queue_add_dropped, inputs=[file_queue_state, upload_text_file], outputs=[queue_counter, queue_table, file_queue_state, upload_text_file])
+    queue_table.select(fn=queue_select_row, inputs=None, outputs=selected_queue_row)
+    queue_remove_btn.click(fn=queue_remove_selected, inputs=[file_queue_state, selected_queue_row], outputs=[queue_counter, queue_table, file_queue_state, selected_queue_row])
+    clear_queue_btn.click(fn=queue_clear_all, inputs=None, outputs=[queue_counter, queue_table, file_queue_state, selected_queue_row, upload_text_file])
     paste_url_btn.click(fn=read_clipboard_text, outputs=url_input)
 
     process_file_btn.click(
         fn=process_file_wrapper, 
-        inputs=[manual_file_input, upload_text_file, remove_ru_cb, bg_mode_cb], 
-        outputs=[ab_path, load_project_dropdown, upload_progress_html, upload_status_text]
-    ).then(toggle_tab_parse, inputs=ab_path, outputs=[inner_tabs, ab_state]
+        inputs=[file_queue_state, upload_text_file, remove_ru_cb, bg_mode_cb, auto_open_upload_cb, sound_done_upload_cb], 
+        outputs=[ab_path, load_project_dropdown, upload_progress_html, upload_status_text, file_queue_state, queue_table, queue_counter, upload_text_file]
+    )
+    sound_done_upload_cb.change(lambda v: AppConfig.save_user_settings({"sound_done": bool(v)}), inputs=sound_done_upload_cb, outputs=[]).then(toggle_tab_parse, inputs=ab_path, outputs=[inner_tabs, ab_state]
     ).then(get_all_projects_xml, inputs=ab_path, outputs=parse_df_output)
     
     url_btn.click(
