@@ -1189,11 +1189,24 @@ def download_selected_files_zip(ab_name, selected_filenames, file_index):
     return create_selected_zip_archive(ab_name, selected_filenames, file_index)
 
 
-def download_current_file(file_path):
-    """Скачать выбранный mp3-файл."""
-    if not file_path or not Path(file_path).is_file():
-        raise gr.Error("File not found!")
-    return gr.update(value=file_path)
+def download_current_file(file_path, ab_path=""):
+    """Скачать выбранный mp3-файл.
+    Resolves the path defensively: first the path passed from the UI, then the
+    currently selected project's mp3 folder, so Download never errors out when
+    the selection state is missing or stale."""
+    # 1) The exact path is already valid -> use it
+    if file_path and Path(file_path).is_file():
+        return gr.update(value=str(file_path))
+    # 2) Fall back to the project's mp3 folder: the currently generated file
+    #    (highest sortable name), or any mp3 if parsing fails.
+    if ab_path:
+        mp3_dir = data_path / str(ab_path) / "mp3"
+        if mp3_dir.is_dir():
+            existing = sorted(mp3_dir.glob("*.mp3"),
+                              key=lambda p: (0, float(p.stem)) if p.stem.replace('.', '', 1).isdigit() else (1, p.stem.lower()))
+            if existing:
+                return gr.update(value=str(existing[-1]))
+    raise gr.Error("File not found!")
 
 
 def snd_list():
@@ -2127,7 +2140,7 @@ def tts_tab(ab_path, tts_state):
     # ── FIX B: download the selected row ──
     row_download_btn.click(
         fn=download_current_file,
-        inputs=[cur_file],
+        inputs=[cur_file, ab_path],
         outputs=[row_download_btn],
     )
 
