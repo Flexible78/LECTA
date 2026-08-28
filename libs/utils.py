@@ -61,10 +61,10 @@ def change_pitch(audio_array, sample_rate, semitones):
 
 
 def download_model(model_url, target_path):
-    # Преобразуем target_path в Path если это еще не Path
+    # Convert target_path to a Path if it isn't one yet
     if not isinstance(target_path, Path):
         target_path = Path(target_path)
-    # Проверяем, существует ли файл
+    # Check whether the file exists
     if target_path.exists():
         return True, False
 
@@ -73,7 +73,7 @@ def download_model(model_url, target_path):
         response.raise_for_status()
         expected_size = int(response.headers.get("content-length", 0))
 
-        # Создаем родительские директории если их нет
+        # Create parent directories if they don't exist
         target_path.parent.mkdir(parents=True, exist_ok=True)
 
         with open(target_path, "wb") as f:

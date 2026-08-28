@@ -2,7 +2,7 @@ from pathlib import Path
 import json
 from . import morph
 
-# Загрузка словаря
+# Load the dictionary
 json_path = Path(__file__).parent / 'num_dict.json'
 num_dict = json.loads(json_path.read_text(encoding='utf-8'))
 
@@ -11,7 +11,7 @@ t_units = num_dict['t_units']
 hundreds = num_dict['hundreds']
 
 def num_to_words(attr1, n, attr2, adv_attr=None):
-    # Определение частей речи, падежа, рода и числа для согласования числительного
+    # Determine part of speech, case, gender and number to agree the numeral
     if adv_attr:
         pos0 = adv_attr['POS']
         pos = adv_attr['POS']
@@ -83,24 +83,24 @@ def num_to_words(attr1, n, attr2, adv_attr=None):
     if n == 0:
         return 'ноль'
 
-    # --- ПРАВКА: Защита от гигантских чисел (Телефоны, Банковские счета) ---
+    # --- EDIT: Guard against giant numbers (phones, bank accounts) ---
     if n >= 1_000_000_000_000:
         digit_words = ['ноль', 'один', 'два', 'три', 'четыре', 'пять', 'шесть', 'семь', 'восемь', 'девять']
         return ' '.join(digit_words[int(d)] for d in str(n))
     # -----------------------------------------------------------------------
 
-    # Числа от 10 до 19
+    # Numbers 10 to 19
     teens = ['десят','одиннадцат','двенадцат','тринадцат','четырнадцат','пятнадцат','шестнадцат','семнадцат','восемнадцат','девятнадцат']
-    # Десятки
+    # Tens
     tens = ['','десят','двадцат','тридцат','сороков','пятьдесят','шестьдесят','семьдесят','восемьдесят','девяност']    
-    # Единицы измерения для миллионов, миллиардов, тысяч
+    # Units for millions, billions, thousands
     million_units = morph.parse('миллион')[0]
     billion_units = morph.parse('миллиард')[0]
     thousand_units = morph.parse('тысяча')[0]
 
     words = []
 
-    # Вспомогательная функция для обработки чисел до 1000
+    # Helper to process numbers up to 1000
     def under_thousand(number):
         if number == 0:
             return []
@@ -160,7 +160,7 @@ def num_to_words(attr1, n, attr2, adv_attr=None):
             else:
                 return [hundreds['gent'][number // 100]] + under_thousand(number % 100)
 
-    # Разбиение числа на миллиарды, миллионы, тысячи и остаток
+    # Split the number into billions, millions, thousands and remainder
     billions = n // 1_000_000_000
     millions = (n % 1_000_000_000) // 1_000_000
     thousands = (n % 1_000_000) // 1_000
@@ -176,7 +176,7 @@ def num_to_words(attr1, n, attr2, adv_attr=None):
             words.append(t_units['loct']['masc']['plur'][thousands])
             words.append('тысячн' + mrf[case][gender]['teens'][ch_num])
         else:
-            # Особые формы для "одна", "две" тысячи
+            # Special forms for "one", "two" thousand
             if thousands % 10 == 1 and thousands % 100 != 11:
                 words.append('одна')
             elif thousands % 10 == 2 and thousands % 100 != 12:

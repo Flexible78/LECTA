@@ -6,7 +6,7 @@ from zipfile import ZipFile, BadZipFile
 import re
 import itertools
 
-# --- Интеграция Razdel для бронебойной обработки ---
+# --- Razdel integration for bulletproof processing ---
 try:
     from razdel import tokenize
     from razdel.segmenters.tokenize import TokenSegmenter, RULES
@@ -58,7 +58,7 @@ class RUAccent:
         self.koziev_paths = []
         self.tiny_mode = False
         
-        # Переменные для кастомных словарей
+        # Variables for custom dictionaries
         self.wildcard_rules = []
         self.manual_accents_dict = {}
         self.master_pattern = None
@@ -110,7 +110,7 @@ class RUAccent:
         self.accents.update(json.load(gzip.open(dictionary_dir / "accents_nn.json.gz")))
         self.accents.update(self.letters_accent)
         
-        # 🚀 КОМПИЛЯЦИЯ СЛОВАРЯ ИЗ ПЕРЕДАННОГО JSON (word_dict.json)
+        # 🚀 DICTIONARY COMPILATION FROM THE PROVIDED JSON (word_dict.json)
         self._compile_custom_dict()
         
         self.accents.update(self.manual_accents_dict)
@@ -165,7 +165,7 @@ class RUAccent:
                     wildcards_count += 1
                 except Exception: pass
             else:
-                # Генерация регистров для обычных слов
+                # Generate case variants for regular words
                 k_words = k_phrase.split()
                 if len(k_words) > 4:
                     cases = [tuple(str.lower for _ in k_words)]
@@ -183,7 +183,7 @@ class RUAccent:
         print(f"   - Точных совпадений сгенерировано: {len(self.manual_accents_dict)}")
         print(f"   - Wildcard правил (*): {wildcards_count}\n")
 
-        # Мастер-регулярка для точных совпадений
+        # Master regex for exact matches
         if self.manual_accents_dict:
             sorted_keys = sorted(self.manual_accents_dict.keys(), key=len, reverse=True)
             escaped_keys = [re.escape(k) for k in sorted_keys]
@@ -343,7 +343,7 @@ class RUAccent:
             return self.process_all_internal(text)
             
         try:
-            # Шаг 1: Wildcards
+            # Step 1: Wildcards
             text_with_wildcards = text
             for pattern, replacement_template, is_literal in self.wildcard_rules:
                 def replacer(match):
@@ -388,7 +388,7 @@ class RUAccent:
                 
                 text_with_wildcards = pattern.sub(replacer, text_with_wildcards)
 
-            # Шаг 2: Точный словарь
+            # Step 2: Exact dictionary
             text_with_dict = text_with_wildcards
             if self.master_pattern:
                 parts = self.master_pattern.split(text_with_wildcards)
@@ -398,13 +398,13 @@ class RUAccent:
                     processed_parts.append(self.manual_accents_dict.get(part, part))
                 text_with_dict = "".join(processed_parts)
             
-            # Шаг 3: Синхронизаторы токенов
+            # Step 3: Token synchronizers
             src_tokens = list(custom_tokenizer(text_with_dict))
             if not src_tokens: return text
             
             src_ru_indices = [i for i, t in enumerate(src_tokens) if re.search(r'[а-яА-ЯёЁa-zA-Z]', t.text)]
             
-            # Шаг 4: Безопасные чанки по 100 токенов (OOM Защита)
+            # Step 4: Safe 100-token chunks (OOM protection)
             text_before = text_with_dict.replace('+', '')
             text_before_toks = list(custom_tokenizer(text_before))
             
@@ -447,7 +447,7 @@ class RUAccent:
             if last_stop < len(text_before):
                 text_after += text_before[last_stop:]
                 
-            # Шаг 5: Идеальная склейка (сохраняем оригинальные пробелы и дефисы)
+            # Step 5: Perfect gluing (keep original spaces and hyphens)
             trg_tokens = list(custom_tokenizer(text_after))
             trg_ru_tokens = [t for t in trg_tokens if re.search(r'[а-яА-ЯёЁa-zA-Z]', t.text)]
             

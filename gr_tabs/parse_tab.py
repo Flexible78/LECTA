@@ -30,7 +30,7 @@ def get_xml_files(ab_path):
     xml_dir = data_path / str(ab_path) / "xml"
     if not xml_dir.exists():
         return []
-    # Безопасная сортировка: сначала числовые имена, потом строковые
+    # Safe sorting: numeric names first, then string names
     def safe_sort(x):
         try:
             return (0, float(x))
@@ -62,7 +62,7 @@ def show_file_content(data: gr.SelectData, ab_path: str):
     if not ab_path or str(ab_path).startswith('<gradio'): 
         return "", gr.update(interactive=False), ""
     value = str(data.value)
-    # Поддержка формата "проект / файл.xml" (из get_all_projects_xml)
+    # Support the "project / file.xml" format (from get_all_projects_xml)
     if " / " in value:
         proj_name, file_name = value.split(" / ", 1)
         xml_dir = data_path / proj_name / "xml"
@@ -147,7 +147,7 @@ def parse_fb2_wrapper(
     yield get_xml_files(ab_path), get_parse_metrics_html(0, "Initializing..."), "Initializing..."
 
     try:
-        # Процессор теперь возвращает процент и сообщение!
+        # The processor now returns a percentage and a message!
         for percent, status_msg in processor.process_book(
             ab_path=ab_path, replace=replace, sound_effect=sound_effect, punctuation=punctuation,
             translit=translit, ch_size=ch_size, remove_ru=remove_ru, is_english=is_english, translate=translate
@@ -423,7 +423,7 @@ def parse_tab(ab_path, acc_state, tts_state):
     )
     refresh_btn.click(fn=get_all_projects_xml, outputs=df_output)
     
-    # VIP QUEUE: Мгновенное прерывание с сохранением!
+    # VIP QUEUE: Instant interrupt with saving!
     stop_btn.click(stop_parse, outputs=[metrics_panel, status], queue=False)
     
     df_output.select(fn=show_file_content, inputs=ab_path, outputs=[file_content, del_btn, cur_file])

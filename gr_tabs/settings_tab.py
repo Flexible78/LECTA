@@ -412,7 +412,7 @@ def settings_tab(tts_state):
                 fn=_save_completion_sound,
                 inputs=completion_sound_sel,
             )
-            # Обновляем список при открытии вкладки
+            # Refresh the list when the tab opens
             s_tabs.select(
                 fn=lambda: _events_sound_choices(),
                 outputs=completion_sound_sel,

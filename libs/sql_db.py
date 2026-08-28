@@ -11,7 +11,7 @@ class SQLiteDatabase:
     def _connect(self):
         try:
             self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
-            self.conn.row_factory = sqlite3.Row  # для доступа по имени
+            self.conn.row_factory = sqlite3.Row  # for access by name
         except sqlite3.Error as e:
             logging.error(f"Failed to connect to database {self.db_path}: {e}")
             raise

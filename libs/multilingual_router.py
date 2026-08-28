@@ -233,12 +233,12 @@ def get_edge_audio(text, voice="he-IL-AvriNeural", target_sr=24000, max_retries=
     ck = _cache_key(voice, target_sr, clean_text)
     ck_str = _cache_key_str(voice, target_sr, clean_text)
 
-    # Проверка 1: память
+    # Check 1: memory
     if ck in _segment_cache:
         logger.info(f"[CACHE HIT] memory: {clean_text[:30]}...")
         return _segment_cache[ck].copy()
 
-    # Проверка 2: диск (.npy)
+    # Check 2: disk (.npy)
     disk_audio = _load_from_disk_cache(ck_str)
     if disk_audio is not None:
         _segment_cache[ck] = disk_audio.copy()
@@ -315,7 +315,7 @@ def process_multilingual_text(text, safe_synth_func,
         return None, None
 
     target_sr = 24000
-    lang_pause = 0.3  # единая пауза между предложениями/языковыми переходами
+    lang_pause = 0.3  # single pause between sentences/language transitions
 
     # Phase 1: Classify edge vs local
     edge_tasks = []
@@ -392,7 +392,7 @@ def process_multilingual_text(text, safe_synth_func,
                 aud_resampled = resample_audio(aud, sr, target_sr)
                 aud_trimmed = gentle_trim_and_fade(aud_resampled, target_sr)
                 local_parts.append(aud_trimmed)
-                # Пауза 0 между чанками одного предложения (было 0.12s)
+                # Zero pause between chunks of one sentence (was 0.12s)
             else:
                 logger.warning(f"[{lang_tag}] Empty chunk {i+1}")
 
@@ -419,7 +419,7 @@ def process_multilingual_text(text, safe_synth_func,
         return None, None
 
     final_audio = np.concatenate(valid)
-    # Убираем тишину в самом начале итогового файла
+    # Remove silence at the very start of the final file
     abs_final = np.abs(final_audio)
     active_start = np.where(abs_final > 0.01)[0]
     if len(active_start) > 0:

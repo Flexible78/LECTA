@@ -10,28 +10,28 @@ import re
 import itertools
 import json
 
-# --- ПОДАВЛЕНИЕ ЛОГОВ ДЛЯ ЧИСТОГО ВЫВОДА ---
+# --- SUPPRESS LOGS FOR CLEAN OUTPUT ---
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 logging.getLogger("transformers").setLevel(logging.ERROR)
 logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
 logging.getLogger("onnxruntime").setLevel(logging.ERROR)
 
-# --- Настройка путей для импорта ---
+# --- Set up import paths ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
     
-# --- ЗАВИСИМОСТИ ---
+# --- DEPENDENCIES ---
 from ruaccent import RUAccent
 import customtkinter as ctk
 
-# Проверка onnxruntime
+# Check onnxruntime
 try:
     import onnxruntime as ort
 except ImportError:
     ort = None
 
-# Импорт razdel для токенизации
+# Import razdel for tokenization
 RAZDEL_AVAILABLE = False
 custom_tokenizer = None
 
@@ -39,12 +39,12 @@ try:
     from razdel import tokenize
     from itertools import pairwise, chain
     
-    # Попытка импорта внутренних компонентов для custom правил
+    # Attempt to import internal components for custom rules
     try:
         from razdel.segmenters.tokenize import TokenSegmenter, RULES, RU
         from razdel.rule import FunctionRule, JOIN
         
-        # Настройка правил razdel для обработки символа +
+        # Configure razdel rules to handle the + character
         def smart_join_rule(split):
             """Умное правило для склеивания слов с дефисами и плюсами (например: В+ест-+Индии)"""
             L = split.left
@@ -52,29 +52,29 @@ try:
             if L is None or R is None:
                 return
 
-            # Получаем текст токенов
+            # Get the token text
             l_text = L.text if hasattr(L, 'text') else str(L)
             r_text = R.text if hasattr(R, 'text') else str(R)
 
-            # Проверяем, что это не пробелы (раздел выделяет пробелы отдельно)
+            # Check that it's not whitespace (the splitter emits whitespace separately)
             if not l_text.strip() or not r_text.strip():
                 return
 
-            # Мы хотим склеивать только если на стыке встречаются: кириллица, плюс, дефис.
-            # Если левая часть заканчивается на кириллицу, плюс или дефис
-            # И правая часть начинается на кириллицу, плюс или дефис
-            # ТО МЫ ИХ СКЛЕИВАЕМ!
+            # We only glue when the junction has: Cyrillic, plus, or hyphen.
+            # If the left part ends with Cyrillic, a plus, or a hyphen
+            # And the right part starts with Cyrillic, a plus, or a hyphen
+            # THEN WE GLUE THEM!
             
             valid_chars = re.compile(r'[а-яА-ЯёЁa-zA-Z\+\-]')
             
-            # Проверяем последний символ левой части и первый символ правой
+            # Check the last char of the left part and the first char of the right
             if valid_chars.match(l_text[-1]) and valid_chars.match(r_text[0]):
-                # Убедимся, что мы не склеиваем два дефиса подряд или что-то странное без букв,
-                # хотя для нейросети это безопасно.
-                # Главное, чтобы в итоге в склеенном токене были буквы.
+                # Make sure we don't glue two hyphens in a row or something odd without letters,
+                # although it's safe for the neural net.
+                # The key thing is that the glued token ends up with letters.
                 return JOIN
 
-        # Создаём токенизатор и добавляем custom правило
+        # Create the tokenizer and add a custom rule
         custom_tokenizer = TokenSegmenter()
         custom_tokenizer.rules = list(RULES) + [FunctionRule(smart_join_rule)]
         
@@ -83,16 +83,16 @@ try:
     except (ImportError, AttributeError) as e:
         print(f"⚠️ Не удалось импортировать внутренние компоненты razdel: {e}")
         print("⚠️ Будет использован стандартный tokenize без custom правил")
-        RAZDEL_AVAILABLE = True  # razdel есть, но без custom правил
+        RAZDEL_AVAILABLE = True  # razdel exists but without custom rules
         
 except ImportError:
     print("⚠️ Модуль razdel не найден. Установите: pip install razdel")
 
-# --- Настройка CustomTkinter ---
+# --- CustomTkinter setup ---
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
-# --- Проверка библиотек Python ---
+# --- Check Python libraries ---
 try:
     import customtkinter
 except ImportError:
@@ -144,7 +144,7 @@ class AccentizerApp(ctk.CTk):
 
         self.settings_file = os.path.join(SCRIPT_DIR, "settings_ruaccent.json")
         
-        # --- ПРОВЕРКА CUDA ---
+        # --- CUDA CHECK ---
         self.cuda_is_available = False
         self.cuda_disabled_reason = "CUDA недоступна"
         
@@ -317,11 +317,11 @@ class AccentizerApp(ctk.CTk):
                 print(f"🛡️ Режим: Токенизация через razdel (стандартные правила)\n")
 
             manual_accents_dict = {}
-            wildcard_rules = [] # Список кортежей (compiled_regex, replacement, is_literal)
+            wildcard_rules = [] # List of tuples (compiled_regex, replacement, is_literal)
             
             custom_dict_file_str = self.custom_dict_path.get()
             
-            # --- 1. ЗАГРУЗКА СЛОВАРЯ
+            # --- 1. LOAD THE DICTIONARY
             if custom_dict_file_str and os.path.exists(custom_dict_file_str):
                 print(f"ℹ️ Найден словарь: {os.path.basename(custom_dict_file_str)}")
                 print("ℹ️ Поддерживаются *, комментарии (#), флаги $ и ==.")
@@ -345,7 +345,7 @@ class AccentizerApp(ctk.CTk):
                             k_phrase, v_phrase = key_raw.strip(), val_raw.strip()
                             is_literal = (sep == '==')
                             
-                            # Проверяем наличие Wildcard (*)
+                            # Check for a Wildcard (*)
                             if '*' in k_phrase:
                                 has_start_star = k_phrase.startswith('*')
                                 has_end_star = k_phrase.endswith('*')
@@ -362,8 +362,8 @@ class AccentizerApp(ctk.CTk):
                                         is_edge = (i == 0) or (i == len(parts) - 1)
                                         if is_edge:
                                             regex_parts.append(r'(\w*)')
-                                            # Добавляем группы ВСЕГДА (они нужны для захвата)
-                                            # В template ссылки вставляем, чтобы восстановить контекст
+                                            # Always add groups (needed for capture)
+                                            # Insert backreferences in the template to restore context
                                             if i == 0:
                                                 replacement_template = r'\g<1>' + replacement_template
                                                 group_idx += 1
@@ -388,7 +388,7 @@ class AccentizerApp(ctk.CTk):
                                     print(f"⚠️ Ошибка компиляции Wildcard '{k_phrase}': {e}")
                                 continue
 
-                            # Стандартная логика для простых слов
+                            # Standard logic for simple words
                             if is_strict:
                                 manual_accents_dict[k_phrase] = v_phrase
                                 lines_processed += 1
@@ -432,13 +432,13 @@ class AccentizerApp(ctk.CTk):
             else:
                 print("ℹ️ Словарь ручных ударений не найден. Будет использована только модель.\n")
 
-            # --- 2. КОМПИЛЯЦИЯ МАСТЕР-РЕГУЛЯРКИ ---
+            # --- 2. COMPILE THE MASTER REGEX ---
             master_pattern = None
             if manual_accents_dict:
                 sorted_keys = sorted(manual_accents_dict.keys(), key=len, reverse=True)
                 escaped_keys = [re.escape(k) for k in sorted_keys]
                 # pattern_str = r'\b(?:' + '|'.join(escaped_keys) + r')\b'
-                # Запрещаем совпадение, если до или после слова стоят буквы, цифры, _ или символ +
+                # Forbid a match if letters, digits, _ or + sit before or after the word
                 pattern_str = r'(?<![\w+])(?:' + '|'.join(escaped_keys) + r')(?![\w+])'
                 try:
                     master_pattern = re.compile(f'({pattern_str})')
@@ -447,7 +447,7 @@ class AccentizerApp(ctk.CTk):
                     print(f"⚠️ Ошибка компиляции Regex: {e}. Точный словарь отключен.")
                     master_pattern = None
 
-            # --- 3. ЗАГРУЗКА RUACCENT ---
+            # --- 3. LOAD RUACCENT ---
             self.accentizer = RUAccent()
             print(f"🔄 Загрузка модели RUAccent ('turbo3.1') на устройство '{device}'...")
             cache_dir = os.path.join(SCRIPT_DIR, "ruaccent_cache")
@@ -455,7 +455,7 @@ class AccentizerApp(ctk.CTk):
             self.accentizer.load(omograph_model_size='turbo3.1', use_dictionary=True, device=device, workdir=cache_dir)
             print("✅ Модель RUAccent успешно загружена. Начинаю обработку...\n")
 
-            # --- 4. ОБРАБОТКА ФАЙЛА ---
+            # --- 4. PROCESS THE FILE ---
             base_filename = os.path.splitext(os.path.basename(source_file))[0]
             output_filename = f"{base_filename}_processed.txt"
             output_file_path = os.path.join(output_folder, output_filename)
@@ -489,7 +489,7 @@ class AccentizerApp(ctk.CTk):
 
     def process_line_with_razdel(self, src_text, manual_dict, master_pattern, wildcard_rules, original_stderr):
         try:
-            # Шаг 0: Wildcards
+            # Step 0: Wildcards
             text_with_wildcards = src_text
             for pattern, replacement_template, is_literal in wildcard_rules:
                 
@@ -497,7 +497,7 @@ class AccentizerApp(ctk.CTk):
                     result = match.expand(replacement_template)
                     original_text = match.group(0)
                     
-                    # 1. Попытка адаптировать регистр (только для мягкой замены =)
+                    # 1. Try to adapt the case (only for soft replacement =)
                     if not is_literal:
                         orig_words = original_text.split()
                         repl_words = result.split()
@@ -522,15 +522,15 @@ class AccentizerApp(ctk.CTk):
                                 else:
                                     res = r_w
                                 final_words.append(res)
-                            result = " ".join(final_words) # Обновляем result
+                            result = " ".join(final_words) # Update result
                         else:
-                            # Fallback для разной длины слов
+                            # Fallback for words of different lengths
                             if original_text.isupper(): result = result.upper()
                             elif original_text.istitle(): result = result.capitalize()
                             elif original_text and original_text[0].isupper(): result = result[0].upper() + result[1:]
 
-                    # 2. Финальная нормализация регистра РЕЗУЛЬТАТА (для обоих режимов)
-                    # "Если в слове смешался регистр из-за подстановки групп, починим его"
+                    # 2. Final case normalization of the RESULT (for both modes)
+                    # "If a word's case got mixed up by group substitution, fix it"
                     # АВТОобус -> АВТООБУС
                     # АвтоОБУС -> Автообус
                     
@@ -554,7 +554,7 @@ class AccentizerApp(ctk.CTk):
                 
                 text_with_wildcards = pattern.sub(replacer, text_with_wildcards)
 
-            # Шаг 1: Точный словарь
+            # Step 1: Exact dictionary
             text_with_dict = text_with_wildcards
             if master_pattern:
                 parts = master_pattern.split(text_with_wildcards)
@@ -567,44 +567,44 @@ class AccentizerApp(ctk.CTk):
                         processed_parts.append(part)
                 text_with_dict = "".join(processed_parts)
             
-            # Шаг 2: Токенизация
+            # Step 2: Tokenization
             tokenizer_func = custom_tokenizer if custom_tokenizer is not None else tokenize
             src_tokens = list(tokenizer_func(text_with_dict))
             if not src_tokens: return src_text
             
-            # Шаг 3: Индексы слов
+            # Step 3: Word indices
             src_ru_indices = []
             for i, token in enumerate(src_tokens):
                 if re.search(r'[а-яА-ЯёЁa-zA-Z]', token.text):
                     src_ru_indices.append(i)
             
-            # Шаг 4: Удаляем плюсы
+            # Step 4: Remove pluses
             text_before = text_with_dict.replace('+', '')
             
-            # Шаг 5: RUAccent
+            # Step 5: RUAccent
             try:
-                # Токенизируем текст без плюсов для точного подсчета слов/пунктуации
+                # Tokenize the text without pluses for an accurate word/punctuation count
                 text_before_toks = list(tokenizer_func(text_before))
                 
-                # Если токенов <= 250 (гарантированно влезает в 512 subwords), обрабатываем целиком
+                # If tokens <= 250 (guaranteed to fit in 512 subwords), process it whole
                 if len(text_before_toks) <= 120:
                     text_after = self.accentizer.process_all(text_before)
                 else:
                     text_after = ""
                     current_idx = 0
                     while current_idx < len(text_before_toks):
-                        # Берем кусок до 200 токенов (с запасом)
+                        # Take a chunk of up to 200 tokens (with headroom)
                         chunk_toks = text_before_toks[current_idx:current_idx + 100]
                         if current_idx + 100 >= len(text_before_toks):
                             cut_idx = len(chunk_toks)
                         else:
                             cut_idx = len(chunk_toks)
-                            # Ищем знаки конца предложения
+                            # Look for end-of-sentence marks
                             for i in range(len(chunk_toks) - 1, -1, -1):
                                 if chunk_toks[i].text in ['.', '!', '?', ';']:
                                     cut_idx = i + 1
                                     break
-                            # Если их нет, ищем запятые
+                            # If none, look for commas
                             if cut_idx == len(chunk_toks):
                                 for i in range(len(chunk_toks) - 1, -1, -1):
                                     if chunk_toks[i].text in [',', ':']:
@@ -615,7 +615,7 @@ class AccentizerApp(ctk.CTk):
                         end_char = chunk_toks[cut_idx - 1].stop
                         chunk_text = text_before[start_char:end_char]
                         
-                        # Сохраняем пробелы/символы между кусками
+                        # Keep the spaces/characters between chunks
                         if current_idx == 0:
                             prefix_spaces = text_before[0:start_char]
                         else:
@@ -624,7 +624,7 @@ class AccentizerApp(ctk.CTk):
                             
                         text_after += prefix_spaces
                         
-                        # Отделяем финальные пробельные символы, если они случайно попали
+                        # Detach trailing whitespace if it accidentally got included
                         m_space = re.match(r'^(.*?)([\s\n]*)$', chunk_text, re.DOTALL)
                         core_text = m_space.group(1)
                         spaces = m_space.group(2)
@@ -635,7 +635,7 @@ class AccentizerApp(ctk.CTk):
                         
                         current_idx += cut_idx
                         
-                    # В конце добавляем остаток пробелов, если есть
+                    # Append the remaining whitespace at the end, if any
                     last_stop = text_before_toks[-1].stop
                     if last_stop < len(text_before):
                         text_after += text_before[last_stop:]
@@ -644,20 +644,20 @@ class AccentizerApp(ctk.CTk):
                 original_stderr.write(f"❌ Ошибка RUAccent в строке '{text_before[:50]}...': {e}\n")
                 return text_with_dict
             
-            # Шаг 6: Токенизация результата
+            # Step 6: Tokenize the result
             trg_tokens = list(tokenizer_func(text_after))
             trg_ru_tokens = []
             for token in trg_tokens:
                 if re.search(r'[а-яА-ЯёЁa-zA-Z]', token.text):
                     trg_ru_tokens.append(token)
             
-            # Шаг 8: Синхронизация
+            # Step 8: Synchronization
             if len(src_ru_indices) == len(trg_ru_tokens):
                 result_tokens = list(src_tokens)
                 for idx_src, token_trg in zip(src_ru_indices, trg_ru_tokens):
                     token_src = result_tokens[idx_src]
                     
-                    # Если словарь уже поставил ударение - оставляем
+                    # If the dictionary already added a stress mark - keep it
                     if '+' in token_src.text:
                         continue 
                     

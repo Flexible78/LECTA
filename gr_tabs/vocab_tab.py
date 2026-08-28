@@ -50,12 +50,12 @@ def save_vocab_project(content, current_project):
         
         files_created = []
         
-        # 1. Сырой текст (.txt)
+        # 1. Raw text (.txt)
         txt_file = proj_dir / f"Vocab_raw_{vocab_filename}.txt"
         txt_file.write_text(content, encoding='utf-8')
         files_created.append(str(txt_file))
         
-        # 2. XML (Для озвучки)
+        # 2. XML (for TTS)
         xml_content = f'<speak autor="Dictionary" album="{project_name}">\n  <break time="30"/>\n'
         for line in content.split('\n'):
             if line.strip() and not line.startswith('[🛑'):
@@ -66,7 +66,7 @@ def save_vocab_project(content, current_project):
         xml_file.write_text(xml_content, encoding='utf-8')
         files_created.append(str(xml_file))
         
-        # Подготовка данных для структурных форматов (JSON, CSV, MD)
+        # Prepare data for structured formats (JSON, CSV, MD)
         struct_data = []
         for line in content.split('\n'):
             if line.strip() and not line.startswith('[🛑'):
@@ -81,7 +81,7 @@ def save_vocab_project(content, current_project):
                 json.dump(struct_data, f, ensure_ascii=False, indent=4)
             files_created.append(str(json_file))
             
-            # 4. CSV (UTF-8-SIG для Excel)
+            # 4. CSV (UTF-8-SIG for Excel)
             csv_file = proj_dir / f"Vocab_{vocab_filename}.csv"
             with open(csv_file, 'w', encoding='utf-8-sig', newline='') as f:
                 writer = csv.DictWriter(f, fieldnames=["Word", "Translation"])
@@ -190,7 +190,7 @@ def extract_and_translate(text, src_langs_ui, tgt_langs_ui, min_length, include_
             html = get_vocab_metrics_html(pct, format_time_hms(elapsed), format_time_hms(rem_sec), f"{speed:.1f} w/s", "Translating...")
             yield "\n".join(results), html, f"⏳ Translated {i+1} of {total_words}", []
             
-    # АВТОСОХРАНЕНИЕ 
+    # AUTOSAVE
     final_text = "\n".join(results)
     save_msg, saved_files = save_vocab_project(final_text, current_project)
     

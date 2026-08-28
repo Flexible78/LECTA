@@ -16,5 +16,5 @@ def normalize_russian(text):
         text = add_comma_before_latin(text)
     return text
 
-# Упрощённый интерфейс
+# Simplified interface
 normalize = normalize_russian

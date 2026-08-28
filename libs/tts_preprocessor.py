@@ -81,17 +81,17 @@ class TextParse:
         def process_word(match):
             word = match.group()
             
-            # Проверяем, есть ли в слове плюс перед гласной
+            # Check whether the word has a plus before a vowel
             if '+' in word:
-                # Находим все гласные в слове
+                # Find all vowels in the word
                 vowels = re.findall(r'[аеёиоуыэюя]', word, flags=re.IGNORECASE)
                 
-                # Если гласная только одна И есть плюс перед гласной
+                # If there is only one vowel AND a plus before the vowel
                 if len(vowels) == 1:
-                    # Удаляем все плюсы из слова
+                    # Remove all pluses from the word
                     return word.replace('+', '')
             
             return word
         
-        # Ищем все слова (включая те, что содержат +)
+        # Find all words (including ones containing +)
         return re.sub(r'[\+а-яё]+\b', process_word, text, flags=re.IGNORECASE)

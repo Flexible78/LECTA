@@ -42,9 +42,9 @@ class FB2Processor:
     def stop_parse(self):
         self.stop_parsing = True
 
-    # === ЗАЩИТА ОТ СТРОК (ФИКС КРАША) ===
+    # === STRING PROTECTION (CRASH FIX) ===
     def remove_namespaces(self, file_path) -> etree._Element:
-        # Конвертируем строку в объект Path, если нужно
+        # Convert the string to a Path object if needed
         path_obj = Path(file_path) if isinstance(file_path, str) else file_path
         
         if not path_obj.exists():
@@ -175,18 +175,18 @@ class FB2Processor:
                     except Exception as e:
                         elem.text = f"[TRANSLATION ERROR] " + elem.text
 
-                # Определяем, есть ли в тексте некириллические/нелатинские символы (иврит, арабский, CJK)
+                # Check whether the text has non-Cyrillic/non-Latin characters (Hebrew, Arabic, CJK)
                 has_non_european = bool(re.search(r'[\u0590-\u05FF\u0600-\u06FF\u4E00-\u9FFF]', elem.text))
                 
                 if not is_english and not has_non_european:
-                    # Чисто русский текст: полная обработка (нормализация + ударения)
+                    # Pure Russian text: full processing (normalization + stress marks)
                     elem.text = normalize_russian(elem.text)
                     elem.text = self.parser.preprocess(elem.text)
                 elif has_non_european and not is_english:
-                    # Смешанный текст (русский + иврит/арабский): только лёгкая чистка мусора,
-                    # без normalize_russian (чтобы не конвертировать латиницу в кириллицу и не ломать иврит)
+                    # Mixed text (Russian + Hebrew/Arabic): only light cleanup,
+                    # without normalize_russian (to avoid converting Latin to Cyrillic and breaking Hebrew)
                     elem.text = self.parser.garbage(elem.text)
-                # else: is_english=True — текст не обрабатываем (поведение не изменилось)
+                # else: is_english=True — the text is not processed (behavior unchanged)
 
                 if len(elem.text) > max_length:
                     for chunk in self.optimize_chunk(elem.text, max_length):

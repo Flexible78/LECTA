@@ -19,12 +19,12 @@ EXC_ABR_PATTERN: Pattern = re.compile(rf'\b(?:{"|".join(map(re.escape, exc_abrs)
 LATIN_SEQUENCE_PATTERN: Pattern = re.compile(r'\b[a-zA-Z]+(?:[\s\'’`´ʼ‘]+[a-zA-Z]+)*\b')
 CYRILLIC_PATTERN: Pattern = re.compile(r'[а-яё]', re.IGNORECASE)
 
-# === ЖЕЛЕЗОБЕТОННАЯ РАСШИФРОВКА АНГЛИЙСКОГО ===
+# === BULLETPROOF ENGLISH DECODING ===
 def expand_english_contractions(text: str) -> str:
-    # Приводим любые косые/кривые апострофы к стандартному прямому
+    # Normalize any slanted/curly apostrophes to a standard straight one
     text = re.sub(r"[’`´ʼ‘]", "'", text)
     
-    # Прямая замена (100% срабатывание без багов регулярных выражений)
+    # Direct replacement (100% reliable, no regex pitfalls)
     reps = {
         "I'm": "I am", "i'm": "I am",
         "I'll": "I will", "i'll": "I will",
@@ -78,13 +78,13 @@ def cyrillize(text: str) -> str:
     return ' '.join(process_word(word) for word in words)
 
 def add_comma_before_latin(text: str) -> str:
-    # 1. Сначала железно расшифровываем английский
+    # 1. First, reliably decode the English
     text = expand_english_contractions(text)
     
     def add_comma(match: re.Match) -> str:
         return ',' + match.group()
     
-    # 2. Потом ставим запятую перед блоком латиницы
+    # 2. Then put a comma before the Latin block
     return LATIN_SEQUENCE_PATTERN.sub(add_comma, text)
 
 def replace_abbreviations(string: str) -> str:

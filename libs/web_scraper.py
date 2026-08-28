@@ -18,7 +18,7 @@ def scrape_and_save_article(url, remove_ru):
         
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # Вырезаем мусор
+        # Strip the junk
         for el in soup(["script", "style", "nav", "footer", "header", "aside", "noscript", "iframe"]):
             el.extract()
             

@@ -14,7 +14,7 @@ import threading
 from pathlib import Path
 
 import gradio as gr
-import libs.multilingual_router as router  # для доступа к флагам USE_EDGE_*
+import libs.multilingual_router as router  # to access the USE_EDGE_* flags
 import numpy as np
 from config import AppConfig, config, TTS_WORKERS, TTS_COOLDOWN_SEC, TTS_GPU_TEMP_LIMIT_C, TTS_GPU_TEMP_RESUME_C
 from libs.accent import accentizer
@@ -43,22 +43,22 @@ stop_text_to_sp = False
 _synthesis_completed = False
 txt_parser = TextParse(False)
 
-# ═══ ПЕРФ: глобальный executor + кэш сегментов (разделяется между проектами) ═══
+# ═══ PERF: global executor + segment cache (shared across projects) ═══
 _tts_executor = ThreadPoolExecutor(max_workers=TTS_WORKERS)
 _tts_sema = threading.Semaphore(TTS_WORKERS)  # limits in-flight synthesis tasks
 _local_segment_cache = {}
 _local_cache_lock = threading.Lock()
-_local_tts_lock = threading.Lock()  # защита от GPU-конкуренции Silero/F5
+_local_tts_lock = threading.Lock()  # guard against GPU contention between Silero/F5
 
 # ═══ THERMAL AUTO-THROTTLE ═══
 _last_temp_poll = 0.0
-_TEMP_POLL_INTERVAL = 3.0  # секунд между проверками
+_TEMP_POLL_INTERVAL = 3.0  # seconds between checks
 _thermal_throttle_active = False
 
 
-# ═══ КАРТА МОДЕЛЕЙ ДЛЯ ОТСЛЕЖИВАНИЯ ═══
-# Сохраняет какое короткое имя модели использовалось для каждого MP3 файла.
-# Файл: data/<project>/tts_model_map.json  →  {"filename_stem": "Silero5_5", ...}
+# ═══ MODEL MAP FOR TRACKING ═══
+# Records which short model name was used for each MP3 file.
+# File: data/<project>/tts_model_map.json  →  {"filename_stem": "Silero5_5", ...}
 _MODEL_MAP_FILE = "tts_model_map.json"
 
 
@@ -171,12 +171,12 @@ def _short_name(name, max_len=24):
     name = str(name).strip()
     if len(name) <= max_len:
         return name
-    # Пробуем обрезать по последнему разделителю (пробел, _, -, .)
+    # Try to trim at the last separator (space, _, -, .)
     truncated = name[:max_len]
     cut = max(truncated.rfind(" "), truncated.rfind("_"), truncated.rfind("-"))
     if cut > max_len // 2:
         return truncated[:cut]
-    # Если нет удачного разделителя — просто обрезаем
+    # If no good separator — just trim
     return truncated.rstrip(" _-")
 
 
@@ -277,7 +277,7 @@ def add_reverb(audio, room_size=0.3, wet_gain=-15, decay_rate=0.4):
     return output
 
 
-# ═══ ПЕРФ: статические хелперы для параллельного синтеза ═══
+# ═══ PERF: static helpers for parallel synthesis ═══
 
 def _safe_synth_static(text, speaker_id, speed, noise, use_accents, disable_norm=False):
     """Module-level safe_synth с кэшированием. Используется в потоках executor'а."""
@@ -287,8 +287,8 @@ def _safe_synth_static(text, speaker_id, speed, noise, use_accents, disable_norm
             txt = accentizer.process_accent(txt, r"\+\w+|\w+\+\w+")
         except Exception:
             pass
-    # ПЕРФ (CPU): F5-TTS inference steps напрямую определяют скорость на CPU.
-    # Принудительно ограничиваем nfe_step до 8 на CPU — выше почти неразличимо по качеству, но в 2-4 раза медленнее.
+    # PERF (CPU): F5-TTS inference steps directly determine CPU speed.
+    # Force nfe_step to 8 on CPU — above that quality is nearly indistinguishable but 2-4x slower.
     _is_cpu = get_device() == "cpu"
     if _is_cpu and synth.ver in (5, 6) and noise:
         try:
@@ -300,17 +300,17 @@ def _safe_synth_static(text, speaker_id, speed, noise, use_accents, disable_norm
     with _local_cache_lock:
         if cache_key in _local_segment_cache:
             return _local_segment_cache[cache_key]
-    # ПЕРФ: блокировка нужна только на GPU (конкуренция за CUDA-контекст).
-    # На CPU убираем её — иначе 4 worker'а сериализуются и скорость падает в N раз.
+    # PERF: the lock is only needed on GPU (contention for the CUDA context).
+    # Drop it on CPU — otherwise 4 workers serialize and speed drops N times.
     def _try_synth():
         if _is_cpu:
             return synth.synth_audio(txt, speaker_id=speaker_id, speed=speed, noise=noise)
         with _local_tts_lock:
             return synth.synth_audio(txt, speaker_id=speaker_id, speed=speed, noise=noise)
 
-    # ── АНТИ-КРАШ: при сбое синтеза (OOM/температура) чистим кэш CUDA,
-    # ждём 2 сек и пробуем ещё раз. Если не вышло — возвращаем None вместо
-    # падения всего процесса (роутер вставит тишину).
+    # ── ANTI-CRASH: on synthesis failure (OOM/temperature) clear the CUDA cache,
+    # wait 2 seconds and retry. If it still fails — return None instead of
+    # crashing the whole process (the router will insert silence).
     res = None
     for attempt in range(2):
         try:
@@ -360,7 +360,7 @@ def _execute_text_chunk(text, speaker_id, speed, noise, use_accents,
     return sr, np_audio, elapsed
 
 
-# === ОСНОВНОЙ ГЕНЕРАТОР ОЗВУЧКИ ===
+# === MAIN TTS GENERATOR ===
 def tts(
     ab_path,
     repl,
@@ -378,7 +378,7 @@ def tts(
     mp3_path = work_dir / "mp3"
     mp3_path.mkdir(parents=True, exist_ok=True)
 
-    # Авто-парсинг: если XML отсутствует или исходник новее — парсим автоматически
+    # Auto-parse: if XML is missing or the source is newer — parse automatically
     if auto_parse:
         fb2_file = work_dir / f"{ab_path}.fb2"
         need_parse = False
@@ -432,7 +432,7 @@ def tts(
 
     files = [x.stem for x in xml_path.glob("*.xml")]
 
-    # --- Считаем общее количество строк для точного прогресс-бара ---
+    # --- Count the total number of lines for an accurate progress bar ---
     total_lines = 0
     for file in files:
         x_file = xml_path / f"{file}.xml"
@@ -453,7 +453,7 @@ def tts(
         )
         return
 
-    # Кэшируем список файлов в начале — не обновляем каждые 3 строки (экономит десятки ffprobe-вызовов)
+    # Cache the file list at the start — don't refresh every 3 lines (saves dozens of ffprobe calls)
     cached_files_list = get_files_list(ab_path)
 
     times_file = work_dir / "parse_times.json"
@@ -510,7 +510,7 @@ def tts(
             final_name = ab_path
         else:
             final_name = file
-        # Короткое имя файла (до ~20 символов) для аккуратного листинга
+        # Short file name (up to ~20 chars) for a tidy listing
         short_final = _short_name(final_name)
 
         mp3_file = mp3_path / f"{short_final}.mp3"
@@ -547,15 +547,15 @@ def tts(
         was_interrupted = False
         audio_segments = [
             AudioSegment.silent(duration=1000, frame_rate=24000)
-        ]  # Начальная пауза 1 сек + накопление сегментов
+        ]  # Initial 1s pause + segment accumulation
 
-        # ── БУФЕР ДЛЯ ЯЗЫКОВО-ОСНОВАННОГО БАТЧИНГА + DEFERRED SYNTH ──
+        # ── LANGUAGE-AWARE BATCHING BUFFER + DEFERRED SYNTH ──
         text_buffer = []
-        buffer_lang = None  # текущий язык буфера
-        buffer_chars = 0  # суммарная длина символов в буфере
-        _BATCH_MAX_CHARS = 6000  # ПЕРФ: увеличен для лучшего F5-TTS параллелизма (Misha)
-        pending_tasks = []  # ПЕРФ: задачи синтеза + аудио-эффекты (в порядке)
-        chunk_timings = []  # ПЕРФ: замеры времени на каждый чанк
+        buffer_lang = None  # current buffer language
+        buffer_chars = 0  # total character count in the buffer
+        _BATCH_MAX_CHARS = 6000  # PERF: increased for better F5-TTS parallelism (Misha)
+        pending_tasks = []  # PERF: synthesis tasks + audio effects (in order)
+        chunk_timings = []  # PERF: per-chunk timing measurements
 
         def _submit_text_task(txt):
             """Submit a text chunk to the executor, throttled by semaphore.
@@ -605,15 +605,15 @@ def tts(
             text_buffer.clear()
             buffer_lang = None
             buffer_chars = 0
-            # Отправляем в executor — синтез будет выполнен параллельно
+            # Submit to the executor — synthesis runs in parallel
             f = _submit_text_task(joined)
             pending_tasks.append({"type": "text", "future": f, "chars": len(joined)})
 
         for i, line in enumerate(root):
             if stop_text_to_sp:
-                # НЕ сбрасываем stop_text_to_sp здесь! Батч-функция должна видеть, что была остановка.
+                # Do NOT reset stop_text_to_sp here! The batch function must see that a stop happened.
                 was_interrupted = True
-                break  # Выходим из цикла строк, но идем дальше по коду для сохранения файла!
+                break  # Exit the line loop but continue through the code to save the file!
 
             current_line += 1
 
@@ -665,11 +665,11 @@ def tts(
                     (f"{speed:.1f} lines/s" if speed > 0 else "—"),
                 )
                 log_txt = f"📄 Preparing: {file}.xml\n📝 Line {current_line} of {total_lines}..."
-                # НЕ вызываем get_files_list каждые 3 строки — это запускает ffprobe на всех MP3!
-                # Возвращаем кэшированный список вместо [] чтобы таблица не мигала.
+                # Do NOT call get_files_list every 3 lines — it runs ffprobe on all MP3s!
+                # Return the cached list instead of [] so the table doesn't flicker.
                 yield cached_files_list, log_txt, html, gr.update(), _build_file_index(ab_path, cached_files_list)
 
-            # --- ЛОГИКА ГЕНЕРАЦИИ ЗВУКА (ПЕРФ: сбор задач вместо немедленного синтеза) ---
+            # --- AUDIO GENERATION LOGIC (PERF: collect tasks instead of immediate synthesis) ---
             audio = AudioSegment.empty()
             if line.tag == "sound" and use_sound_effect:
                 flush_text_buffer()
@@ -682,10 +682,10 @@ def tts(
                 and use_sound_effect
                 and not line.text
             ):
-                # cite/empty-line БЕЗ текста: просто сброс буфера
+                # cite/empty-line WITHOUT text: just reset the buffer
                 flush_text_buffer()
             elif line.tag in ("cite", "empty-line") and use_sound_effect and line.text:
-                # cite/empty-line С текстом: defer to executor
+                # cite/empty-line WITH text: defer to executor
                 flush_text_buffer()
                 task_meta = {"type": "text_inline"}
                 if line.tag == "cite":
@@ -698,17 +698,17 @@ def tts(
                 task_meta["chars"] = len(line.text or "")
                 pending_tasks.append(task_meta)
             elif line.text:
-                # Обычный текст: language-aware batching
+                # Plain text: language-aware batching
                 stripped = line.text.strip()
                 line_lang = _detect_lang(stripped)
 
-                # mixed-строки: сброс буфера + defer to executor
+                # mixed lines: reset the buffer + defer to executor
                 if line_lang == "mixed":
                     flush_text_buffer()
                     f = _submit_text_task(stripped)
                     pending_tasks.append({"type": "text_inline", "future": f, "chars": len(stripped)})
                 else:
-                    # Проверяем: можно ли добавить в текущий буфер?
+                    # Check: can we append to the current buffer?
                     can_batch = (
                         buffer_lang is not None
                         and buffer_lang == line_lang
@@ -718,19 +718,19 @@ def tts(
                         flush_text_buffer()
                     text_buffer.append(stripped)
                     buffer_lang = line_lang
-                    buffer_chars += len(stripped) + 1  # +1 за '\n'
+                    buffer_chars += len(stripped) + 1  # +1 for '\n'
 
-            # Для cite/empty-line с текстом аудио будет создано позже из future
+            # For cite/empty-line with text, audio is created later from the future
             if line.tag in ("cite", "empty-line") and use_sound_effect and line.text:
-                audio = None  # не добавляем сейчас — будет собрано из future
+                audio = None  # don't add now — it will be collected from the future
 
-            # Добавляем аудио если оно не пустое (пустое = текст ушёл в буфер)
-            # ПЕРФ: не добавляем audio_segments здесь — всё идёт через pending_tasks
+            # Add audio if it's not empty (empty = text went into the buffer)
+            # PERF: don't append audio_segments here — everything goes through pending_tasks
 
-        # Сбрасываем остатки буфера после цикла
+        # Flush the remaining buffer after the loop
         flush_text_buffer()
 
-        # ── PHASE B: разрешаем все отложенные задачи синтеза (futures) ──
+        # ── PHASE B: resolve all deferred synthesis tasks (futures) ──
         text_task_count = sum(1 for t in pending_tasks if "future" in t)
         total_tasks = text_task_count if text_task_count > 0 else len(pending_tasks)
         done_tasks = 0
@@ -844,7 +844,7 @@ def tts(
             )
             return
 
-        # ПЕРФ: лог параллельного синтеза
+        # PERF: parallel synthesis log
         if chunk_timings:
             total_chunk_time = sum(chunk_timings)
             avg = total_chunk_time / len(chunk_timings)
@@ -852,10 +852,10 @@ def tts(
             print(f"[PERF] {len(chunk_timings)} chunks synthesized (total text tasks: {text_task_count})")
             print(f"[PERF] Avg chunk time: {avg:.2f}s | Max: {max_t:.2f}s | Total: {total_chunk_time:.1f}s")
 
-        # --- O(n) КОНКАТЕНАЦИЯ ВСЕХ СЕГМЕНТОВ (вместо O(n²) через оператор +) ---
+        # --- O(n) CONCATENATION OF ALL SEGMENTS (instead of O(n²) via +) ---
         out_audio = _concat_audio_segments(audio_segments)
 
-        # --- ФИНАЛЬНАЯ ОБРАБОТКА (Сработает даже при прерывании!) ---
+        # --- FINAL PROCESSING (Runs even on interruption!) ---
         if back_sound_sel:
             back_sound_file = sound_dir / "back" / back_sound_sel
             pr_audio = AudioSegment.from_wav(str(back_sound_file))
@@ -881,7 +881,7 @@ def tts(
             "album": album,
         }
 
-        # Определяем имя файла (полное или частичное)
+        # Determine the file name (full or partial)
         save_path = str(partial_mp3_file) if was_interrupted else str(mp3_file)
 
         if cover_file.exists():
@@ -895,9 +895,9 @@ def tts(
         else:
             out_audio.export(save_path, format="mp3", bitrate=f"{bitrate}", tags=tags)
 
-        # Запоминаем модель, использованную для этого файла (читаем synth.ver непосредственно перед сохранением)
+        # Remember the model used for this file (read synth.ver right before saving)
         model_short = get_model_short_name(synth.ver)
-        # При прерывании файл сохраняется с суффиксом _PARTIAL — сохраняем метаданные под его реальным именем
+        # On interruption the file is saved with a _PARTIAL suffix — save metadata under its real name
         saved_stem = partial_mp3_file.stem if was_interrupted else mp3_file.stem
         _save_model_map_entry(ab_path, saved_stem, model_short)
 
@@ -921,7 +921,7 @@ def tts(
                 _safe_audio(last_final_mp3_path),
                 _build_file_index(ab_path, get_files_list(ab_path)),
             )
-            return  # Выходим из функции полностью, чтобы не начинать следующий файл
+            return  # Exit the function entirely so the next file isn't started
 
         # ── PHASE C: Writing MP3, then 100% only when file is on disk ──
         # Update cache after saving new file
@@ -945,7 +945,7 @@ def tts(
                 _build_file_index(ab_path, cached_files_list),
             )
 
-    # ФИНАЛ — only now can we show 100%
+    # FINAL — only now can we show 100%
     _synthesis_completed = True
     gr.Info("Done")
     yield (
@@ -971,7 +971,7 @@ def get_files_list(ab_name):
         except:
             pass
 
-    # Карта: короткое имя модели для каждого файла
+    # Map: short model name for each file
     model_map = _load_model_map(ab_name)
 
     if d_path.exists():
@@ -992,9 +992,9 @@ def get_files_list(ab_name):
             file_key = file_path.stem
             elapsed = parse_times.get(file_key, 0)
             ptime_str = format_audio_time(elapsed) if elapsed > 0 else "N/A"
-            # Короткое имя модели (из карты) или '?'
+            # Short model name (from the map) or '?'
             model_label = model_map.get(file_key, "?")
-            # Частичные файлы помечаем в колонке обработки
+            # Mark partial files in the processing column
             if "_PARTIAL" in file_path.name:
                 ptime_str = "interrupted"
             rows.append(
@@ -1012,7 +1012,7 @@ def get_files_list(ab_name):
 def create_zip_archive(ab_path, file_index):
     """Упаковывает ВСЕ mp3 из индекса/таблицы в zip.
     Если индекс пуст — fallback на сканирование папки текущего проекта."""
-    # ⚠️ Предупреждение: синтез не завершён — архив может быть неполным
+    # ⚠️ Warning: synthesis not finished — the archive may be incomplete
     if not _synthesis_completed:
         gr.Warning("⚠️ Synthesis not finished yet! The archive may be incomplete.")
 
@@ -1038,7 +1038,7 @@ def create_zip_archive(ab_path, file_index):
         with zipfile.ZipFile(zip_filename, "w", zipfile.ZIP_DEFLATED) as zipf:
             for file_path in mp3_files:
                 arcname = file_path.name
-                # Дедуп: если имя уже встречалось — добавляем индекс, НЕ пропускаем
+                # Dedup: if the name was already seen — add an index, do NOT skip
                 if arcname in seen_names:
                     seen_names[arcname] += 1
                     stem, ext = file_path.stem, file_path.suffix
@@ -1062,7 +1062,7 @@ def create_zip_archive(ab_path, file_index):
 
 def create_selected_zip_archive(ab_path, selected_filenames, file_index):
     """Упаковывает ТОЛЬКО выбранные файлы в zip, используя индекс для резолва путей."""
-    # ⚠️ Предупреждение: синтез не завершён — архив может быть неполным
+    # ⚠️ Warning: synthesis not finished — the archive may be incomplete
     if not _synthesis_completed:
         gr.Warning("⚠️ Synthesis not finished yet! The archive may be incomplete.")
 
@@ -1098,7 +1098,7 @@ def create_selected_zip_archive(ab_path, selected_filenames, file_index):
         raise gr.Error(f"Error: {str(e)}")
 
 
-# ── ХЕЛПЕРЫ ДЛЯ ФИКСА B: чекбоксы, массовые операции ──
+# ── FIX B HELPERS: checkboxes, bulk operations ──
 
 def get_file_checkbox_choices(ab_name, df_output=None):
     """Возвращает список имён mp3-файлов для CheckboxGroup (со сбросом выбора)."""
@@ -1141,7 +1141,7 @@ def delete_selected_files(selected_filenames, ab_name, confirm_state, file_index
             file_index,
         )
 
-    # Второй клик — удаление
+    # Second click — delete
     deleted = 0
     errors = 0
     for fname in selected_filenames:
@@ -1150,7 +1150,7 @@ def delete_selected_files(selected_filenames, ab_name, confirm_state, file_index
             try:
                 file_path.unlink()
                 deleted += 1
-                # Чистим запись о модели в РЕАЛЬНОМ проекте файла
+                # Remove the model record from the file's REAL project
                 model_map = _load_model_map(proj)
                 if file_path.stem in model_map:
                     model_map.pop(file_path.stem, None)
@@ -1164,7 +1164,7 @@ def delete_selected_files(selected_filenames, ab_name, confirm_state, file_index
                 gr.Warning(f"Delete error {fname}: {e}")
                 errors += 1
 
-    # Удаляем записи из индекса
+    # Remove entries from the index
     for fname in selected_filenames:
         if file_index and fname in file_index:
             del file_index[fname]
@@ -1208,7 +1208,7 @@ def del_file(filename, ab_name, file_index, df_output):
         gr.Warning("Select a file in the table first, then click Delete")
         return df_output, file_index
     file_path = Path(filename)
-    # Ищем отображаемое имя по реальному пути
+    # Find the display name by real path
     display_name = None
     if file_index:
         for disp, p in file_index.items():
@@ -1219,7 +1219,7 @@ def del_file(filename, ab_name, file_index, df_output):
         try:
             file_path.unlink()
             gr.Info(f"Deleted file {file_path.name}", duration=2)
-            # Чистим запись о модели в РЕАЛЬНОМ проекте файла
+            # Remove the model record from the file's REAL project
             proj = _project_from_path(file_path) or str(ab_name)
             model_map = _load_model_map(proj)
             if file_path.stem in model_map:
@@ -1232,7 +1232,7 @@ def del_file(filename, ab_name, file_index, df_output):
                     pass
         except Exception as e:
             gr.Warning(f"Delete error: {e}")
-    # Удаляем запись из индекса
+    # Remove the entry from the index
     if file_index and display_name and display_name in file_index:
         del file_index[display_name]
     new_df = [row for row in (df_output or []) if row[0] != display_name]
@@ -1240,7 +1240,7 @@ def del_file(filename, ab_name, file_index, df_output):
 
 
 def sel_file(data: gr.SelectData, ab_path, file_index):
-    # Имя файла теперь чистый текст (колонка 0)
+    # The file name is now plain text (column 0)
     filename_raw = data.row_value[0]
     if not filename_raw or not str(filename_raw).endswith(".mp3"):
         gr.Warning("Could not determine file name from table row")
@@ -1276,7 +1276,7 @@ def rename_selected_file(current_path, new_name, ab_path, file_index, df_output)
         gr.Warning("A file with this name already exists!")
         return df_output, gr.update(), file_index
 
-    # Определяем отображаемое имя в индексе
+    # Determine the display name in the index
     display_name = None
     if file_index:
         for disp, p in file_index.items():
@@ -1297,7 +1297,7 @@ def rename_selected_file(current_path, new_name, ab_path, file_index, df_output)
                 parse_times[safe_name] = parse_times.pop(old_stem)
                 with open(times_file, "w", encoding="utf-8") as f:
                     json.dump(parse_times, f)
-        # Переносим запись о модели в tts_model_map.json РЕАЛЬНОГО проекта
+        # Move the model record to the REAL project's tts_model_map.json
         model_map = _load_model_map(proj)
         if old_path.stem in model_map:
             model_map[safe_name] = model_map.pop(old_path.stem)
@@ -1307,7 +1307,7 @@ def rename_selected_file(current_path, new_name, ab_path, file_index, df_output)
                     json.dump(model_map, f, ensure_ascii=False)
             except Exception:
                 pass
-        # Обновляем индекс
+        # Update the index
         if file_index and display_name:
             del file_index[display_name]
             new_display_name = display_name
@@ -1317,7 +1317,7 @@ def rename_selected_file(current_path, new_name, ab_path, file_index, df_output)
             else:
                 new_display_name = new_path.name
             file_index[new_display_name] = str(new_path.resolve())
-        # Обновляем таблицу
+        # Update the table
         if df_output is not None:
             new_df = []
             for row in df_output:
@@ -1339,9 +1339,9 @@ def stop_tts():
     return "🛑 Stopping after current line (saving file)..."
 
 
-# ═══ ФОНОВЫЙ ВОРКЕР (переживает закрытие GUI/браузера) ═══
-# Запускает полный цикл «парсинг + озвучка + пакет из 3 файлов» в отдельном
-# детачнутом процессе. GUI может упасть или быть закрытым — работа идёт.
+# ═══ BACKGROUND WORKER (survives GUI/browser close) ═══
+# Runs the full loop «parse + TTS + 3-file pack» in a separate
+# detached process. The GUI may crash or close — the work continues.
 
 def _bg_status_path() -> Path:
     return Path(__file__).resolve().parent.parent / "tmp" / "bg_worker_status.json"
@@ -1381,7 +1381,7 @@ def launch_background_job(
     if not projects:
         raise gr.Error("No projects selected!")
 
-    # Читаем сохранённые настройки (парсинг + TTS), как в остальном приложении
+    # Read the saved settings (parsing + TTS) like the rest of the app
     try:
         fresh_cfg = AppConfig.load_user_settings()
         ps_ch_size = getattr(fresh_cfg, "ch_size", 200)
@@ -1397,7 +1397,7 @@ def launch_background_job(
         ps_ch_size, ps_punctuation, ps_translit, ps_sound_effect = 200, False, True, False
         saved_spk, saved_rate, saved_back, saved_bitrate, saved_noise = "", 1.0, "", 96, 10
 
-    # Текущий выбор модели и облачные флаги
+    # Current model selection and cloud flags
     model_ver = getattr(synth, "ver", None) or 5
     device = get_device()
 
@@ -1436,7 +1436,7 @@ def launch_background_job(
     except Exception as e:
         raise gr.Error(f"Cannot write job file: {e}")
 
-    # Сбрасываем статус, чтобы GUI не показывал старый
+    # Reset the status so the GUI doesn't show the stale one
     try:
         _bg_status_path().write_text(
             json.dumps({"state": "starting", "stage": "init", "project": "", "pct": 0,
@@ -1453,7 +1453,7 @@ def launch_background_job(
 
     flags = 0
     if os.name == "nt":
-        # Отвязываем процесс от консоли: переживёт закрытие GUI/браузера
+        # Detach the process from the console: survives GUI/browser close
         flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
     try:
         logf = open(str(_bg_log_path()), "w", encoding="utf-8")
@@ -1510,7 +1510,7 @@ def read_bg_status():
     return html
 
 
-# === ПАКЕТНАЯ ОЗВУЧКА ВСЕХ ПРОЕКТОВ ===
+# === BATCH TTS FOR ALL PROJECTS ===
 def batch_tts_all_projects(
     spk_sel,
     sp_rate,
@@ -1565,12 +1565,12 @@ def batch_tts_all_projects(
     batch_last_progress_update = 0.0
     processed_count = 0
     batch_current_line = 0
-    all_files = []  # НАКАПЛИВАЕМ MP3 ВСЕХ ПРОЕКТОВ
-    batch_stats = []  # для финальной сводной таблицы
+    all_files = []  # ACCUMULATE MP3s FROM ALL PROJECTS
+    batch_stats = []  # for the final summary table
     batch_file_index = {}  # display_name -> absolute_mp3_path
-    seen_display_names = set()  # для отслеживания коллизий имён
+    seen_display_names = set()  # to track name collisions
 
-    # Загружаем настройки парсинга из сохранённой конфигурации
+    # Load parsing settings from the saved configuration
     try:
         fresh_config = AppConfig.load_user_settings()
         parse_ch_size = getattr(fresh_config, "ch_size", 200)
@@ -1600,7 +1600,7 @@ def batch_tts_all_projects(
             elapsed = time.monotonic() - global_start
             pct = min(99, int(processed_count / total * 100)) if total > 0 else 0
 
-            # Показываем частичную сводку по завершённым проектам
+            # Show a partial summary of completed projects
             partial_html = get_batch_metrics_html(
                 f"stopped at {processed_count} of {total}",
                 0,
@@ -1632,7 +1632,7 @@ def batch_tts_all_projects(
 
         has_xml = xml_dir.exists() and bool(list(xml_dir.glob("*.xml")))
 
-        # txt-проект без fb2 и без xml → создаём fb2 из первого *.txt
+        # txt project without fb2 or xml → create fb2 from the first *.txt
         if not has_xml and not fb2_file.exists():
             txt_files = sorted(work_dir.glob("*.txt"))
             if txt_files:
@@ -1652,12 +1652,12 @@ def batch_tts_all_projects(
                     yield (all_files, f"⚠️ [{idx}/{total}] {project}: failed to create fb2 from txt: {e}", gr.update(), gr.update(), batch_file_index)
                     continue
 
-        # нет ни xml, ни fb2 (и txt не нашёлся) → пропуск с логом
+        # neither xml nor fb2 (and no txt found) → skip with a log
         if not has_xml and not fb2_file.exists():
             yield (all_files, f"⚠️ [{idx}/{total}] {project}: skipped — no XML/FB2/TXT", gr.update(), gr.update(), batch_file_index)
             continue
 
-        # Авто-парсинг FB2 если XML ещё нет
+        # Auto-parse FB2 if XML isn't there yet
         if not has_xml:
             batch_pre_pct = int((idx - 1) / total * 100)
             elapsed = time.monotonic() - global_start
@@ -1681,7 +1681,7 @@ def batch_tts_all_projects(
                     batch_file_index,
                 )
             try:
-                # Используем сохранённые настройки парсинга из конфигурации
+                # Use the saved parsing settings from the configuration
                 proc = FB2Processor()
                 for _ in proc.process_book(
                     ab_path=project,
@@ -1694,7 +1694,7 @@ def batch_tts_all_projects(
                     if stop_text_to_sp:
                         break
 
-                # Авто-очистка XML после парсинга (как в parse_tab)
+                # Auto-clean XML after parsing (like in parse_tab)
                 clean_album = re.sub(r"[\W_]*\d{6,}[\W_]*\d*$", "", project)
                 if len(clean_album) > 35:
                     clean_album = clean_album[:35] + "..."
@@ -1762,7 +1762,7 @@ def batch_tts_all_projects(
                 )
                 continue
 
-        # Запуск TTS для проекта
+        # Run TTS for the project
         proj_start = time.monotonic()
         for tts_result in tts(
             project,
@@ -1780,7 +1780,7 @@ def batch_tts_all_projects(
                 break
             files_list, log_msg, tts_html, audio_update, _ = tts_result
 
-            # Извлекаем процент текущего проекта из HTML tts()
+            # Extract the current project's percentage from the tts() HTML
             project_pct = parse_percent_from_html(tts_html)
 
             # Track batch-level line timing for rolling average
@@ -1805,7 +1805,7 @@ def batch_tts_all_projects(
 
             batch_last_progress_update = now_batch
 
-            # Общий прогресс: (завершённые проекты + доля текущего) / всего
+            # Overall progress: (completed projects + share of current) / total
             batch_pct = min(99, int(((idx - 1) + project_pct / 100) / total * 100))
 
             elapsed = now_batch - global_start
@@ -1824,7 +1824,7 @@ def batch_tts_all_projects(
                 speed_proj = projects_done / elapsed if elapsed > 0 else 0
                 rem_sec = max(0, (total - projects_done) / speed_proj) if speed_proj > 0 else 0
 
-            # Формат скорости: lines/sec if we have line data, else proj/s
+            # Speed format: lines/sec if we have line data, else proj/s
             if total_lines_batch > 0 and len(batch_recent_line_times) >= 3:
                 speed_str = f"{batch_recent_speed:.1f} lines/s"
             else:
@@ -1848,11 +1848,11 @@ def batch_tts_all_projects(
                 rem_str,
                 speed_str,
             )
-            # НАКАПЛИВАЕМ: текущие файлы проекта + все предыдущие
+            # ACCUMULATE: current project files + all previous ones
             combined_display = all_files + files_list
             yield combined_display, f"[{idx}/{total}] {project}: {log_msg}", batch_html, audio_update, batch_file_index
 
-        # Собираем статистику по завершённому проекту
+        # Collect stats for the completed project
         dur, size_mb, proc_time = get_project_stats(project)
         batch_stats.append(
             (
@@ -1887,7 +1887,7 @@ def batch_tts_all_projects(
                 time.sleep(1)
                 slept += 1
 
-        # НАКАПЛИВАЕМ: добавляем MP3 завершённого проекта в общий список
+        # ACCUMULATE: add the completed project's MP3s to the global list
         project_files = get_files_list(project)
         for r in project_files:
             rc = list(r)
@@ -1908,7 +1908,7 @@ def batch_tts_all_projects(
     speed_final = processed_count / elapsed if elapsed > 0 else 0
     sec_per_proj_final = max(0, 1 / speed_final) if speed_final > 0 else 0
 
-    # Финальный HTML: двойной бар + сводная таблица
+    # Final HTML: double bar + summary table
     final_bars = get_batch_metrics_html(
         "✅ Completed",
         100,
@@ -1994,7 +1994,7 @@ def change_tts_model(mver):
     return gr.update(value=speaker, choices=sp_list)
 
 
-# === ОТРИСОВКА ВКЛАДКИ ===
+# === TAB RENDERING ===
 def tts_tab(ab_path, tts_state):
     with gr.Tab(label="🎧 TTS", id=2) as tts_tab_ui:
         with gr.Row():
@@ -2124,7 +2124,7 @@ def tts_tab(ab_path, tts_state):
     )
     create_arh_btn.click(create_zip_archive, inputs=[ab_path, batch_file_index_state], outputs=download_btn)
 
-    # ── ФИКС B: скачивание выбранной строки ──
+    # ── FIX B: download the selected row ──
     row_download_btn.click(
         fn=download_current_file,
         inputs=[cur_file],
@@ -2142,7 +2142,7 @@ def tts_tab(ab_path, tts_state):
         outputs=[df_output, rename_panel, batch_file_index_state],
     )
 
-    # ── ФИКС B: выбрать все / снять всё для файлов ──
+    # ── FIX B: select all / deselect all for files ──
     sel_all_files_btn.click(
         fn=select_all_files, inputs=[ab_path, df_output], outputs=[file_checkboxes]
     )
@@ -2150,7 +2150,7 @@ def tts_tab(ab_path, tts_state):
         fn=deselect_all_files, outputs=[file_checkboxes]
     )
 
-    # ── ФИКС B: скачать выбранные (zip) ──
+    # ── FIX B: download selected (zip) ──
     dl_selected_btn.click(
         fn=download_selected_files_zip,
         inputs=[ab_path, file_checkboxes, batch_file_index_state],
@@ -2161,8 +2161,8 @@ def tts_tab(ab_path, tts_state):
         outputs=[dl_selected_output],
     )
 
-    # ── ФИКС B: удалить выбранные (с подтверждением) ──
-    # Сброс подтверждения при изменении выбора файлов
+    # ── FIX B: delete selected (with confirmation) ──
+    # Reset the confirmation when the file selection changes
     file_checkboxes.change(
         fn=lambda: (gr.update(value="🗑 Delete selected"), "idle"),
         outputs=[del_selected_btn, del_confirm_state],
@@ -2248,7 +2248,7 @@ def tts_tab(ab_path, tts_state):
 
     stop_btn.click(stop_tts, outputs=output_log, queue=False)
 
-    # ── Фоновый воркер: запуск + живой статус ──
+    # ── Background worker: start + live status ──
     bg_run_btn.click(
         fn=launch_background_job,
         inputs=[

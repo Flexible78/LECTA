@@ -8,7 +8,7 @@ from libs.utils import download_model
 
 logger = logging.getLogger(__name__)
 
-# Глобальный флаг для остановки скачивания моделей
+# Global flag to stop model downloads
 _stop_model_update = False
 
 def stop_model_update():
@@ -17,14 +17,14 @@ def stop_model_update():
     _stop_model_update = True
     return "🛑 Stopping after the current model..."
 
-# Высчитываем корневую директорию (fb2tts/) относительно папки libs/
+# Compute the root directory (fb2tts/) relative to the libs/ folder
 CURRENT_DIR = Path(__file__).resolve().parent.parent
 
 # =============================================================================
-# РЕЕСТР ГОЛОСОВЫХ МОДЕЛЕЙ (для кнопки "Обновить модели")
+# VOICE MODEL REGISTRY (for the "Update models" button)
 # =============================================================================
-# Каждый пункт: (id, название, список файлов для скачивания)
-# Файл: (url, локальный_путь_относительно_models/)
+# Each item: (id, name, list of files to download)
+# File: (url, local_path_relative_to_models/)
 VOICE_MODELS_REGISTRY = [
     ("vosk_010", "Vosk 0.10 (56 voices)", [
         ("https://myfreenet.ru/models/vosk-model-tts-ru-0.10-multi.zip",
@@ -61,13 +61,13 @@ VOICE_MODELS_REGISTRY = [
 ]
 
 # =============================================================================
-# СТАРЫЕ ВЕРСИИ ФАЙЛОВ ДЛЯ АВТО-УДАЛЕНИЯ ПРИ ОБНОВЛЕНИИ
+# OLD FILE VERSIONS FOR AUTO-DELETION ON UPDATE
 # =============================================================================
-# Ключ — model_id, значение — список старых путей (относительно models/) которые
-# нужно удалить после успешного обновления модели на новую версию.
+# Key — model_id, value — list of old paths (relative to models/) that
+# must be deleted after the model updates to a new version.
 OLD_FILES_CLEANUP = {
-    "silero_ru": ["silero/v5_ru.pt"],          # заменён на v5_5_ru.pt
-    # При будущих обновлениях добавляйте старые версии сюда:
+    "silero_ru": ["silero/v5_ru.pt"],          # replaced by v5_5_ru.pt
+    # For future updates add old versions here:
     # "silero_cis": ["silero/v5_cis_base_v1.pt"],
     # "f5_misha": ["F5TTS_v1_Base_v4_winter/model_old.pt"],
 }
@@ -250,7 +250,7 @@ def delete_selected_model(model_name, confirmed, tts_model_ver=None, acc_model_v
         )
 
 # =============================================================================
-# ОБНОВЛЕНИЕ / СКАЧИВАНИЕ ГОЛОСОВЫХ МОДЕЛЕЙ
+# VOICE MODEL UPDATING / DOWNLOADING
 # =============================================================================
 def _format_size(size_bytes):
     """Форматирует размер байтов в человекочитаемый вид (КБ/МБ/ГБ)."""
@@ -265,13 +265,13 @@ def _format_size(size_bytes):
 def _get_file_size(url, local_path):
     """Возвращает размер файла в байтах: с диска если установлен, иначе из HTTP content-length.
     Возвращает 0 если размер не удалось определить (ошибка сети/файла)."""
-    # Сначала проверяем локальный файл
+    # First check the local file
     if local_path.exists():
         try:
             return local_path.stat().st_size
         except Exception:
             pass
-    # Для Vosk zip: проверяем распакованную папку
+    # For Vosk zip: check the extracted folder
     if str(local_path).endswith('.zip'):
         extracted_dir = local_path.parent / local_path.stem
         if extracted_dir.exists():
@@ -279,7 +279,7 @@ def _get_file_size(url, local_path):
                 return sum(f.stat().st_size for f in extracted_dir.rglob('*') if f.is_file())
             except Exception:
                 pass
-    # Запрашиваем content-length с сервера (HEAD запрос)
+    # Request content-length from the server (HEAD request)
     try:
         resp = requests.head(url, allow_redirects=True, timeout=8)
         cl = resp.headers.get('content-length')
@@ -300,7 +300,7 @@ def get_voice_models_choices():
         for url, rel_path in files:
             local_path = CURRENT_DIR / "models" / rel_path
             is_installed = local_path.exists()
-            # Vosk: zip удаляется после распаковки — проверяем папку
+            # Vosk: the zip is removed after extraction — check the folder
             if not is_installed and rel_path.endswith('.zip'):
                 extracted_dir = CURRENT_DIR / "models" / Path(rel_path).stem
                 if extracted_dir.exists():
@@ -357,7 +357,7 @@ def check_voice_model_status(model_id):
             for url, rel_path in files:
                 local_path = CURRENT_DIR / "models" / rel_path
                 exists = local_path.exists()
-                # Vosk: zip удаляется после распаковки — проверяем папку
+                # Vosk: the zip is removed after extraction — check the folder
                 if not exists and rel_path.endswith('.zip'):
                     extracted_dir = CURRENT_DIR / "models" / Path(rel_path).stem
                     exists = extracted_dir.exists()
@@ -388,16 +388,16 @@ def update_voice_model(model_id):
 
     for url, rel_path in files:
         local_path = CURRENT_DIR / "models" / rel_path
-        # Определяем размер файла ДО скачивания (с диска или из HTTP-заголовка)
+        # Determine the file size BEFORE downloading (from disk or HTTP header)
         file_size = _get_file_size(url, local_path)
         model_total_bytes += file_size
         size_str = _format_size(file_size)
 
-        # Если файл уже есть — пропускаем (не перезаписываем без необходимости)
+        # If the file already exists — skip (don't overwrite unless needed)
         if local_path.exists():
             results.append(f"✅ {rel_path} — already installed ({size_str})")
             continue
-        # Vosk zip: проверяем распакованную папку
+        # Vosk zip: check the extracted folder
         if rel_path.endswith('.zip'):
             extracted_dir = CURRENT_DIR / "models" / Path(rel_path).stem
             if extracted_dir.exists():
@@ -415,7 +415,7 @@ def update_voice_model(model_id):
             results.append(f"❌ {rel_path} — {e}")
             all_ok = False
 
-    # Особый случай: Vosk — нужно распаковать zip
+    # Special case: Vosk — the zip must be extracted
     if model_id in ("vosk_010",) and all_ok:
         from zipfile import ZipFile
         zip_path = CURRENT_DIR / "models" / files[0][1]
@@ -428,7 +428,7 @@ def update_voice_model(model_id):
         except Exception as e:
             results.append(f"⚠️ Unpack error: {e}")
 
-    # Авто-удаление старых версий файлов после успешного обновления
+    # Auto-delete old file versions after a successful update
     if all_ok and model_id in OLD_FILES_CLEANUP:
         for old_rel_path in OLD_FILES_CLEANUP[model_id]:
             old_path = CURRENT_DIR / "models" / old_rel_path
@@ -449,20 +449,20 @@ def update_all_voice_models():
     Показывает размеры каждого файла и общий объём скачивания.
     Поддерживает остановку через stop_model_update()."""
     global _stop_model_update
-    _stop_model_update = False  # Сбрасываем флаг в начале
+    _stop_model_update = False  # Reset the flag at the start
 
     total = len(VOICE_MODELS_REGISTRY)
     all_results = []
     ok_count = 0
     total_bytes = 0
 
-    # Первый yield — мгновенный отклик, чтобы UI не выглядел зависшим
+    # First yield — instant feedback so the UI doesn't look frozen
     yield f"📦 Starting update of {total} models...\n⏳ Determining file sizes...\n\n"
 
     for i, (m_id, m_name, _) in enumerate(VOICE_MODELS_REGISTRY, 1):
-        # Проверка флага остановки
+        # Check the stop flag
         if _stop_model_update:
-            _stop_model_update = False  # Сбрасываем для следующего запуска
+            _stop_model_update = False  # Reset for the next run
             stop_line = (
                 f"\n\n{'═' * 40}"
                 f"\n🛑 Stopped by the user!"
@@ -478,7 +478,7 @@ def update_all_voice_models():
         if "✅" in status and "❌" not in status:
             ok_count += 1
 
-        # Живой прогресс: показываем накопленный лог + счётчик + общий объём
+        # Live progress: show accumulated log + counter + total size
         progress_line = (
             f"\n\n{'─' * 40}"
             f"\n📊 Progress: {i}/{total} models | ✅ {ok_count} up to date"
@@ -504,7 +504,7 @@ def check_all_voice_models():
     installed_bytes = 0
     missing_bytes = 0
 
-    # Первый yield — мгновенный отклик
+    # First yield — instant feedback
     yield f"🔍 Checking {total} voice models...\n⏳ Checking installed files and sizes of missing ones...\n\n"
 
     for i, (m_id, m_name, files) in enumerate(VOICE_MODELS_REGISTRY, 1):
@@ -516,12 +516,12 @@ def check_all_voice_models():
         for url, rel_path in files:
             local_path = CURRENT_DIR / "models" / rel_path
             is_installed = local_path.exists()
-            # Vosk: zip удаляется после распаковки — проверяем папку
+            # Vosk: the zip is removed after extraction — check the folder
             if not is_installed and rel_path.endswith('.zip'):
                 extracted_dir = CURRENT_DIR / "models" / Path(rel_path).stem
                 is_installed = extracted_dir.exists()
 
-            # Размер: с диска если установлен, иначе из HTTP content-length
+            # Size: from disk if installed, otherwise from HTTP content-length
             file_size = _get_file_size(url, local_path)
             size_str = _format_size(file_size)
 
@@ -550,8 +550,8 @@ def check_all_voice_models():
 
         all_results.append(f"─── [{i}/{total}] {header} ───\n" + "\n".join(lines))
 
-        # Живой прогресс после каждой модели
-        # «0 Б» если действительно ничего, иначе форматированный размер ("?" если размер неизвестен)
+        # Live progress after each model
+        # "0 B" if truly nothing, otherwise a formatted size ("?" if unknown)
         installed_size_str = "0 B" if installed_bytes == 0 else _format_size(installed_bytes)
         missing_size_str = "0 B" if missing_bytes == 0 else _format_size(missing_bytes)
         progress_line = (
@@ -561,7 +561,7 @@ def check_all_voice_models():
         )
         yield "\n\n".join(all_results) + progress_line
 
-    # Финальная сводка
+    # Final summary
     installed_size_str = "0 B" if installed_bytes == 0 else _format_size(installed_bytes)
     summary = (
         f"\n\n═══════════════════"

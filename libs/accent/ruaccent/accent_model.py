@@ -35,7 +35,7 @@ class AccentModel:
         lower_word = word.lower()
         inputs = self.tokenizer(lower_word, return_tensors="np")
         inputs = {k: v.astype(np.int64) for k, v in inputs.items()}
-        # Добавляем token_type_ids, если их нет
+        # Add token_type_ids if they're missing
         if 'token_type_ids' not in inputs:
             seq_len = inputs['input_ids'].shape[1]
             inputs['token_type_ids'] = np.zeros((1, seq_len), dtype=np.int64)

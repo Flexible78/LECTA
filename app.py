@@ -1,8 +1,8 @@
 import os
 os.environ["GRADIO_LANGUAGE"] = "en"
 
-# ── Фикс UnicodeEncodeError: консоль Windows (cp1251) не умеет эмодзи (🔧☁️✅).
-# Переводим stdout/stderr на UTF-8 с replace, чтобы логи не падали на эмодзи.
+# ── Fix UnicodeEncodeError: Windows console (cp1251) can't print emoji (🔧☁️✅).
+# Switch stdout/stderr to UTF-8 with replace so logs don't crash on emoji.
 import sys as _sys
 for _stream in (_sys.stdout, _sys.stderr):
     try:
@@ -59,7 +59,7 @@ from libs.fb2_processor import FB2Processor
 
 os.system("color")
 
-# ═══ ЗАГРУЗКА СОХРАНЁННЫХ ФЛАГОВ EDGE TTS ═══
+# ═══ LOAD SAVED EDGE TTS FLAGS ═══
 try:
     saved = AppConfig.load_user_settings()
     router.USE_EDGE_FOR_ENGLISH = getattr(saved, 'use_edge_english', False)
@@ -101,14 +101,14 @@ def global_exception_handler(exc_type, exc_value, exc_traceback):
 sys.excepthook = global_exception_handler
 
 # ==============================================================================
-# ЧТЕНИЕ ИЗ БУФЕРА ОБМЕНА WINDOWS
+# READ FROM WINDOWS CLIPBOARD
 # ==============================================================================
 def read_clipboard_path() -> str:
     """Извлекает пути к файлам из буфера обмена Windows.
     Поддерживает: копирование файлов в Проводнике (CF_HDROP) и копирование текстовых путей."""
     CREATE_NO_WINDOW = 0x08000000
     
-    # Способ 1: PowerShell Get-Clipboard -Format FileDropList (для файлов из Проводника)
+    # Method 1: PowerShell Get-Clipboard -Format FileDropList (for files from Explorer)
     try:
         process = subprocess.Popen(
             ["powershell", "-NoProfile", "-command",
@@ -122,7 +122,7 @@ def read_clipboard_path() -> str:
     except Exception:
         pass
     
-    # Способ 2: PowerShell Get-Clipboard -Format Text (для текстовых путей)
+    # Method 2: PowerShell Get-Clipboard -Format Text (for text paths)
     try:
         process = subprocess.Popen(
             ["powershell", "-NoProfile", "-command",
@@ -140,7 +140,7 @@ def read_clipboard_path() -> str:
     except Exception:
         pass
     
-    # Способ 3: tkinter (запасной вариант)
+    # Method 3: tkinter (fallback)
     try:
         root = tk.Tk(); root.withdraw()
         clip_text = root.clipboard_get()
@@ -195,7 +195,7 @@ def process_file_wrapper(manual_path, drop_files, remove_ru, bg_mode=False):
     Если bg_mode=True — после конвертации в FB2 запускает ПОЛНЫЙ цикл
     (парсинг + озвучка + пакет из 3 файлов) в фоновом воркере, который
     переживает закрытие GUI/браузера."""
-    # ── Шаг 1: Сбор путей ──
+    # ── Step 1: Collect paths ──
     file_paths = []
     if manual_path and manual_path.strip():
         raw_paths = re.split(r'[\n|]+', manual_path)
@@ -217,7 +217,7 @@ def process_file_wrapper(manual_path, drop_files, remove_ru, bg_mode=False):
         yield gr.update(), gr.update(), "", ""
         return
     
-    # ── Шаг 2: Конвертация в FB2 (быстро, без парсинга) ──
+    # ── Step 2: Convert to FB2 (fast, no parsing) ──
     processed = []
     errors = []
     for i, fp in enumerate(file_paths, 1):
@@ -239,7 +239,7 @@ def process_file_wrapper(manual_path, drop_files, remove_ru, bg_mode=False):
     total = len(processed)
     drop_update = refresh_data(first_ab)
     
-    # ── Режим «в фоне»: конвертация сделана, дальше всё делает воркер ──
+    # ── Background mode: conversion done, the worker takes over ──
     if bg_mode:
         try:
             from gr_tabs.tts_tab import launch_background_job
@@ -248,13 +248,13 @@ def process_file_wrapper(manual_path, drop_files, remove_ru, bg_mode=False):
             return
         except Exception as e:
             logger.warning(f"⚠️ Background launch failed, falling back to inline parse: {e}")
-            # fallback — парсим как обычно
+            # fallback — parse as usual
     
-    # ── Первый yield: обновляем dropdown + показываем начало прогресса ──
+    # ── First yield: update dropdown + show progress start ──
     yield drop_update, drop_update, get_upload_progress_html(0, 0, total, "Starting..."), f"📦 Loaded {total} projects. Starting parse..."
     
-    # ── Шаг 3: Парсинг каждого проекта с живым прогрессом ──
-    # Читаем сохранённые настройки парсинга
+    # ── Step 3: Parse each project with live progress ──
+    # Read the saved parsing settings
     try:
         fresh_cfg = AppConfig.load_user_settings()
         ps_ch_size = getattr(fresh_cfg, 'ch_size', 200)
@@ -288,24 +288,24 @@ def process_file_wrapper(manual_path, drop_files, remove_ru, bg_mode=False):
                 f"⚠️ [{i+1}/{total}] Parse error {ab_name}: {e}"
             )
     
-    # ── Финальный yield: скрываем прогресс-бар ──
+    # ── Final yield: hide the progress bar ──
     gr.Info(f"✅ Loaded and parsed: {total} projects", duration=5)
     yield (
         gr.update(), gr.update(),
-        "",  # сбрасываем прогресс-бар
+        "",  # reset the progress bar
         f"🎉 All {total} projects parsed! Ready for TTS."
     )
 
 def clean_srt_timings(text):
     """Clean SRT timecodes from text (for dictionary preparation)"""
     if not text: return text
-    # Удаляем таймкоды 00:00:19,560 --> 00:00:21,570
+    # Remove timecodes 00:00:19,560 --> 00:00:21,570
     text = re.sub(r'\d{2}:\d{2}:\d{2}[,\.]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[,\.]\d{3}', '', text)
-    # Удаляем одиночные номера строк SRT
+    # Remove standalone SRT line numbers
     text = re.sub(r'(?m)^\d+$\n?', '', text)
-    # Удаляем JSON структуру, если вставили JSON массив
+    # Strip JSON structure if a JSON array was pasted
     text = re.sub(r'[{}[\]",:]|id|time|ORIGINAL|EN|RU', '', text)
-    # Чистим лишние переносы строк
+    # Clean up extra line breaks
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 
@@ -333,7 +333,7 @@ def text_to_audio(string, spk, rate=1, noise=None, pitch=None, ref_audio=None, r
         )
         if np_audio is None: return None
         if pitch != 50: np_audio = change_pitch(np_audio, sr, pitch)
-        # Конвертируем float32 в int16 для Gradio (чтобы избежать предупреждения)
+        # Convert float32 to int16 for Gradio (to avoid a warning)
         if np_audio.dtype == np.float32 or np_audio.dtype == np.float64:
             np_audio = np.clip(np_audio, -1.0, 1.0)
             np_audio = (np_audio * 32767).astype(np.int16)
@@ -489,7 +489,7 @@ with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew")
         fast_ru_cb = gr.Checkbox(label="⚡ Russian via cloud (Edge TTS)", value=router.USE_EDGE_FOR_RUSSIAN, info="Instant speed! Requires internet. Voice: Dmitry")
         fast_eng_cb = gr.Checkbox(label="⚡ English via cloud", value=router.USE_EDGE_FOR_ENGLISH, info="Fast generation via Microsoft Edge")
         
-        # ДОБАВЛЕН ИВРИТ ЧЕРЕЗ ОБЛАКО
+        # HEBREW ADDED VIA CLOUD
         fast_heb_cb = gr.Checkbox(label="⚡ Hebrew via cloud", value=router.USE_EDGE_FOR_HEBREW, info="Microsoft Edge TTS (recommended — local TTS does not support Hebrew)")
         
         dict_mode_cb = gr.Checkbox(label="📚 Dictionary mode (long pauses)", value=router.DICTIONARY_MODE, info="1 sec breath between languages")
@@ -684,7 +684,7 @@ with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew")
             settings_tab(tts_state)
 
     # ==============================================================================
-    # БЛОК ОБРАБОТЧИКОВ СОБЫТИЙ 
+    # EVENT HANDLERS BLOCK
     # ==============================================================================
     def set_fast_russian(val):
         router.USE_EDGE_FOR_RUSSIAN = val

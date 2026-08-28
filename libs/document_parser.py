@@ -60,8 +60,8 @@ def parse_and_save_document(file_path_str, remove_ru):
     ab_path = data_path / ab_name
     ab_path.mkdir(parents=True, exist_ok=True)
     
-    # Сохраняем путь к исходному файлу — фоновый воркер использует его,
-    # чтобы положить итоговый пакет из 3 файлов рядом с исходником.
+    # Save the source file's path — the background worker uses it
+    # to place the final 3-file pack next to the source.
     try:
         (ab_path / "_source_path.txt").write_text(str(Path(file_path_str).resolve()), encoding="utf-8")
     except Exception:

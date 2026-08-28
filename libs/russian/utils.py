@@ -1,4 +1,4 @@
-# Названия месяцев в родительном падеже
+# Month names in the genitive case
 month_names = {
     '01': 'января', '02': 'февраля', '03': 'марта',
     '04': 'апреля', '05': 'мая', '06': 'июня',
@@ -6,7 +6,7 @@ month_names = {
     '10': 'октября', '11': 'ноября', '12': 'декабря'
 }
 
-# Словарь транслитерации латинских букв и диграфов в кириллицу
+# Transliteration map from Latin letters and digraphs to Cyrillic
 cyrillization_mapping = {
     'a': 'а', 'b': 'б', 'c': 'к', 'd': 'д', 'e': 'е',
     'f': 'ф', 'g': 'г', 'h': 'х', 'i': 'и', 'j': 'й',
@@ -14,14 +14,14 @@ cyrillization_mapping = {
     'p': 'п', 'q': 'к', 'r': 'р', 's': 'с', 't': 'т',
     'u': 'у', 'v': 'в', 'w': 'в', 'x': 'кс', 'y': 'ы',
     'z': 'з',
-    # Частые диграфы
+    # Common digraphs
     'sh': 'ш', 'ch': 'ч', 'th': 'з', 'ph': 'ф', 'oo': 'у', 'ee': 'и', 'kh': 'х',
-    # Частые триграфы
+    # Common trigraphs
     'sch': 'ск'
-    # Все символы приводятся к нижнему регистру при транслитерации
+    # All characters are lowercased during transliteration
 }
 
-# Фонетическое произношение русских букв
+# Phonetic pronunciation of Russian letters
 pronunciation_map = {
     'А': 'а', 'Б': 'бэ', 'В': 'вэ', 'Г': 'гэ', 'Д': 'дэ',
     'Е': 'е', 'Ё': 'ё', 'Ж': 'жэ', 'З': 'зэ', 'И': 'и',

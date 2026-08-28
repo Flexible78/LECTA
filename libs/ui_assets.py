@@ -1,4 +1,4 @@
-# libs/ui_assets.py — CSS, JavaScript и HTML-генераторы прогресс-баров
+# libs/ui_assets.py — CSS, JavaScript and HTML progress-bar generators
 import json
 
 custom_css = """

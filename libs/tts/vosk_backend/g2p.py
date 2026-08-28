@@ -4,7 +4,7 @@ import re
 
 class G2P:
     def __init__(self, dictionary: Dict[str, str], phoneme_id_map: Dict[str, int]):
-        # Константы
+        # Constants
         self.SOFTLETTERS = set("яёюиье")
         self.STARTSYL = set("#ъьаяоёуюэеиы-")
         self.OTHERS = {"#", "+", "-", "ь", "ъ"}
@@ -24,7 +24,7 @@ class G2P:
             "э": "e", "е": "e", "и": "i", "ы": "y"
         }
 
-        self.dictionary = dictionary  # слово -> фонемы (строка)
+        self.dictionary = dictionary  # word -> phonemes (string)
         self.phoneme_id_map = phoneme_id_map
 
     def add_pos(self, x):
@@ -75,14 +75,14 @@ class G2P:
                 cur_punc = []
                 continue
 
-            # Пропускаем символы, которых нет в словаре, или конвертируем
+            # Skip characters not in the dictionary, or convert them
             if word in self.dictionary:
                 word_phonemes = self.dictionary[word].split()
             else:
-                # Конвертируем только допустимые символы
+                # Convert only valid characters
                 cleaned_word = ''.join(ch for ch in word if ch.isalpha() or ch in "+#-")
                 if not cleaned_word:
-                    continue  # полностью игнорируем слово из "мусора"
+                    continue  # fully ignore a "junk" word
                 word_phonemes = self.convert(cleaned_word).split()
 
             if word_pos:
@@ -104,8 +104,8 @@ class G2P:
         phone_bert_embeddings = []
         phoneme_id_map = self.phoneme_id_map
 
-        # Замена по умолчанию — ID пробела
-        default_id = phoneme_id_map.get(' ', 0)  # fallback на 0, если даже пробела нет (маловероятно)
+        # Default replacement — the space ID
+        default_id = phoneme_id_map.get(' ', 0)  # fallback to 0 if there's no space either (unlikely)
 
         for p in reversed(phonemes):
             if "..." in p[1]:
@@ -127,7 +127,7 @@ class G2P:
             else:
                 cur_punc = "_"
 
-            # Получаем ID с fallback
+            # Get the ID with a fallback
             p0_id = phoneme_id_map.get(p[0], default_id)
             cur_punc_id = phoneme_id_map.get(cur_punc, default_id)
             last_punc_id = phoneme_id_map.get(last_punc, default_id)

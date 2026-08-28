@@ -31,9 +31,9 @@ TTS_GPU_TEMP_RESUME_C = int(os.getenv("LECTA_GPU_TEMP_RESUME", "72"))
 # GPU power limit in watts. Requires nvidia-smi AND administrator rights,
 # therefore not used by default. Change manually only.
 TTS_GPU_POWER_LIMIT_W = None
-# Path.home() может вернуть относительный путь (например 'tmp'), если
-# USERPROFILE/appdata заданы как относительные в Start.cmd (портабельная сборка).
-# Разрешаем относительно каталога config.py (fb2tts/), чтобы путь всегда был абсолютным.
+# Path.home() may return a relative path (e.g. 'tmp') if
+# USERPROFILE/appdata are set as relative in Start.cmd (portable build).
+# Resolve relative to the config.py directory (fb2tts/) so the path is always absolute.
 _BASE_DIR = Path(__file__).resolve().parent
 _home = Path.home()
 if not _home.is_absolute():
@@ -62,7 +62,7 @@ class AppConfig:
     use_sound_effect: bool = False
     models_path: str = os.getenv("LECTA_MODELS_DIR", "models")
     data_path: str = 'data'
-    # Edge TTS cloud flags (сохраняются между перезапусками)
+    # Edge TTS cloud flags (persisted across restarts)
     use_edge_english: bool = False
     use_edge_russian: bool = False
     use_edge_hebrew: bool = True
@@ -106,7 +106,7 @@ class AppConfig:
         fields = {f.name for f in AppConfig.__dataclass_fields__.values()}
         filtered = {k: v for k, v in settings.items() if k in fields}
 
-        # Пересоздаём каталог на случай если clean_tmp_folder() удалил tmp/.config/
+        # Recreate the directory in case clean_tmp_folder() removed tmp/.config/
         USER_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
         with open(USER_SETTINGS_FILE, 'w', encoding='utf-8') as f:
             json.dump(filtered, f, ensure_ascii=False, indent=4)

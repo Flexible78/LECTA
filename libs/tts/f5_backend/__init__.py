@@ -14,7 +14,7 @@ class F5Model:
         self.speakers_data = None
         self.speakers = None
         self.model = None
-        # Уважает глобальный переключатель GPU/CPU из tts/__init__.py
+        # Respects the global GPU/CPU switch from tts/__init__.py
         try:
             from libs.tts import get_device
             self.device = get_device()
@@ -49,7 +49,7 @@ class F5Model:
             self.speakers_list(device=self.device)
         vocab_char_map, vocab_size = self.vocab
         
-        # --- ПРАВКА: Строго 512 для всех моделей, чтобы не было size mismatch ---
+        # --- EDIT: Strictly 512 for all models to avoid size mismatch ---
         model_cfg = dict(dim=1024, depth=22, heads=16, ff_mult=2, text_dim=512, conv_layers=4)
         
         model = CFM(
@@ -99,7 +99,7 @@ class F5Synth:
     def __init__(self, model):
         self.model = model
         self.vocoder = None
-        self._vocoder_lock = threading.Lock()  # защита ленивой загрузки вокодера
+        self._vocoder_lock = threading.Lock()  # guard the lazy vocoder load
 
     def generate_audio(
         self,
@@ -119,7 +119,7 @@ class F5Synth:
         ref_text = ref_data.get('text', "")
         ref_audio_len = ref_data['audio_len']
 
-        # --- ПРАВКА: Защита от пустого текста образца (чинит IndexError) ---
+        # --- EDIT: Guard against an empty sample text (fixes IndexError) ---
         if not ref_text:
             ref_text = " "
         elif len(ref_text) > 0 and len(ref_text[-1].encode("utf-8")) == 1:

@@ -327,7 +327,7 @@ def num_to_words(attr1, n, attr2, adv_attr=None):
 def normalize_russian(text):
     text = normalize_number_with_text(text)
     text = normalize_number_without_text(text)
-    # перевод латиницы в кирилицу
+    # transliterate Latin to Cyrillic
     text = cyrrilize(text)    
     return text
 

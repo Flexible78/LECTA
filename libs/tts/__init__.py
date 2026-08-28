@@ -23,8 +23,8 @@ def _model_not_found_hint():
         "  3) Or place the 'models' folder next to the LECTA application."
     )
 
-# ── КАРТА КОРОТКИХ ИМЁН МОДЕЛЕЙ (для отображения в таблице аудио) ──
-# Используется tts_tab.py при сохранении и показе MP3.
+# ── SHORT MODEL-NAME MAP (for the audio table display) ──
+# Used by tts_tab.py when saving and displaying MP3s.
 MODEL_SHORT_NAMES = {
     2: "Vosk0.10",
     3: "Silero5_5",
@@ -38,9 +38,9 @@ def get_model_short_name(ver):
     """Возвращает короткое имя текущей TTS-модели по её версии (ver)."""
     return MODEL_SHORT_NAMES.get(ver, "?")
 
-# ── ГЛОБАЛЬНЫЙ ПЕРЕКЛЮЧАТЕЛЬ УСТРОЙСТВА GPU/CPU ──
-# Управляется из app.py через set_tts_device()
-# "auto" = cuda если доступна иначе cpu
+# ── GLOBAL GPU/CPU DEVICE SWITCH ──
+# Controlled from app.py via set_tts_device()
+# "auto" = cuda if available, otherwise cpu
 _tts_device_mode = "auto"
 
 def get_device():
@@ -78,14 +78,14 @@ class TTSModel:
         self.model = None
         self.ver = None
         self.device = torch.device(device)
-        self.f5synth = None  # Кэшируем F5Synth чтобы не перезагружать вокодер каждый раз
-        self._f5synth_lock = threading.Lock()  # защита ленивой инициализации F5Synth при параллельном синтезе
+        self.f5synth = None  # Cache F5Synth so the vocoder isn't reloaded every time
+        self._f5synth_lock = threading.Lock()  # guard the lazy F5Synth init during parallel synthesis
 
     def load(self, ver):
         if self.model is not None:
             del self.model
             self.model = None
-            self.f5synth = None  # Сбрасываем кэш при смене модели
+            self.f5synth = None  # Reset the cache when the model changes
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             gc.collect()
@@ -102,7 +102,7 @@ class TTSModel:
                     return None, f"Failed to load model: {e}.{_model_not_found_hint()}"
                 return None, f"Initialization error: {e}"
         elif ver in [3, 4, 7]:
-            # Обновляем устройство при каждой загрузке (пользователь мог переключить GPU/CPU)
+            # Refresh the device on every load (the user may have switched GPU/CPU)
             self.device = torch.device(get_device())
             if ver == 3:
                 model_name = 'v5_5_ru.pt'
@@ -150,8 +150,8 @@ class TTSModel:
             np_audio = (np_audio * 32767).astype(np.int16)
             return np_audio, 48000
         elif self.ver == 5 or self.ver == 6:
-            # Кэшируем F5Synth — иначе вокодер перезагружается с диска на каждый вызов!
-            # Двойная проверка под локом: на CPU несколько потоков могут войти одновременно.
+            # Cache F5Synth — otherwise the vocoder reloads from disk on every call!
+            # Double-checked locking: on CPU several threads can enter at once.
             if self.f5synth is None or self.f5synth.model is not self.model:
                 with self._f5synth_lock:
                     if self.f5synth is None or self.f5synth.model is not self.model:

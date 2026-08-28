@@ -68,7 +68,7 @@ def normalize_number_with_text(text):
                         second_num = num_to_words(pre_attr, int(nn[0][2]), data_attr, dattr)
                         return stor[0] + ' ' + first_num + inter + second_num + ' ' + last_word
                     
-                    # === ТОТ САМЫЙ ФИКС ДЛЯ БУКВЫ "l" (lang) ===
+                    # === THE SAME FIX FOR THE LETTER "l" (lang) ===
                     is_buildup = stor[2] in buildup
                     if is_buildup:
                         dattr = buildup[stor[2]]
@@ -110,7 +110,7 @@ def replace_roman(text):
         start_idx = match.start()
         end_idx = match.end()
         
-        # --- ПРЕДОХРАНИТЕЛЬ ОТ АНГЛИЙСКОГО ЯЗЫКА ---
+        # --- ENGLISH GUARD ---
         if roman == 'I' and end_idx < len(text) and text[end_idx] == "'":
             return roman
             
@@ -124,7 +124,7 @@ def replace_roman(text):
             markers = ['глава', 'часть', 'том', 'век', 'акт', 'раздел', 'пункт', 'николай', 'петр', 'александр', 'людовик', 'карл', 'екатерина']
             if not any(m in prefix for m in markers):
                 return roman
-        # --- Конец предохранителя ---
+        # --- End of the guard ---
         
         num = roman_to_int(roman)
         return str(num)
