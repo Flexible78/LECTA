@@ -156,6 +156,10 @@ Models and their download URLs:
 
 ## Tab 5 — ⚙️ Settings
 
+### Audio & pauses
+
+Open the **🎚 Audio & pauses** section to choose a generation profile and tune the pauses used by both foreground and background TTS. `compact` is the default for tighter narration; `natural` adds more breathing room; `learning` uses longer study intervals. The explicit-break cap, edge trim, micro-fade and leading silence are also configurable. These generation controls are separate from the MP3-cleaner profiles in **✂️ Remove pauses** and are saved in the user settings.
+
 ### Background music
 
 Upload `.wav` files to `sound/back/` and select one to mix under the narration.
@@ -303,9 +307,14 @@ When you synthesise text that contains multiple languages, LECTA:
    - English → Edge cloud (if enabled) or Silero English v3 (local)
    - Russian → Edge cloud (if enabled) or the selected local model (Vosk/Silero/F5)
 3. Synthesises all segments in parallel (cloud) or sequentially (local GPU).
-4. Concatenates the audio with a short pause (0.3 s) between language switches.
+4. Concatenates the audio with a short, configurable pause at language switches
+   (160 ms in the default `compact` profile; see Settings → Audio & pauses).
 
 You do not need to tag languages manually — the router detects them automatically.
+
+### Detached/background TTS
+
+In a project's **🎧 TTS** panel, click **⚡ Run in background (close GUI OK)** to start a separate worker for the selected project(s), or all projects when the selection is empty. The UI reports progress from a status file; the worker performs parsing, synthesis and three-file package creation independently. The package contains a combined MP3, readable TXT and the original source file. It is published only after the individual chapter MP3s and package contents pass validation. The output is saved next to the source book when available, otherwise in Downloads. Do not delete the project/source or close Windows while the job is running. You can close the browser/app after the worker has started; on completion it may open the package folder and play a sound according to the selected options.
 
 ### Batch mode
 
@@ -315,6 +324,39 @@ Click **⬇️ Batch TTS all projects** to process every project in `data/` in o
 - Each project's output MP3 is listed with a per-row download button.
 - Select multiple rows to delete or download as a ZIP.
 - The batch runs through the same parallel edge synth + shared cache as single TTS.
+
+### Deleting projects and MP3 files
+
+The **🎧 TTS** tab has two independent delete areas; both are irreversible, so every
+destructive button asks for a second click.
+
+- **Projects** (checkbox list at the top, "Select projects for batch TTS"):
+  - **🗑 Delete selected** removes the ticked project folders with their XML,
+    MP3, cover and text.
+  - **💣 Delete ALL projects** removes every project folder in `data/`.
+  - The first click only arms the button and shows the exact count
+    (`⚠️ Confirm: delete N project(s)`). Click the same button again to delete;
+    changing the ticked projects disarms it.
+  - Internal folders (`_archive`, `tts_cache`, `_audio_tools`) are never deleted,
+    and deletion is refused while the detached background worker is busy.
+- **MP3 files** (right-hand table of the selected project):
+  - **Delete file (Delete)** — delete the row currently selected in the table
+    (also bound to the `Delete` key).
+  - **🗑 Delete selected files** — delete the files ticked in the file checkbox
+    list.
+  - **🗑 Delete ALL project files** — delete every MP3 of the project but keep
+    the project itself (XML, FB2, cover).
+
+After a project is removed, the project dropdown and both checkbox lists refresh
+automatically. Files are deleted from disk immediately — there is no recycle bin.
+
+---
+
+## Tab 6 — ✂️ Remove pauses
+
+The standalone MP3 cleaner analyzes and shortens detected silent gaps without re-running TTS. It accepts uploaded MP3s, selected LECTA projects, or file/folder paths. Use **Analyze** to inspect pause durations, **Preview before / after** to listen to a sample window, then select files and run **Clean selected batch**. Results are written as new, collision-safe files; the source MP3 is not overwritten. Use **Cancel**, **Open output folder**, or **Download cleaned ZIP** as needed. The default **Compact** preset is conservative; **Natural** preserves more space, while **Aggressive** can remove quiet consonants and should only be used after previewing.
+
+For detailed steps and parameter descriptions, see [Audio pauses and MP3 cleaner (Russian)](AUDIO_GUIDE_RU.md).
 
 ### Output location
 

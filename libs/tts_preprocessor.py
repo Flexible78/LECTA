@@ -9,6 +9,14 @@ class TextParse:
         self.accent = accent
         self.single_vowel = single_vowel
         self.cust_dict = dict(sql_db.select('cust_dict',{'word':False,'transcription':False}))
+        self._cust_pattern = None
+
+    def _compiled_custom_dict(self):
+        # Rebuilding this alternation on every paragraph was a real hot spot.
+        if self._cust_pattern is None:
+            keys = [k for k in self.cust_dict if k]
+            self._cust_pattern = re.compile('|'.join(map(re.escape, keys))) if keys else False
+        return self._cust_pattern or None
 
     def preprocess(self, string):
         string = re.sub(r'°', 'градус', string)
@@ -70,7 +78,9 @@ class TextParse:
         return string
 
     def replace_hrname(self, string):
-        string_com = re.compile('|'.join(self.cust_dict.keys()))
+        string_com = self._compiled_custom_dict()
+        if string_com is None:
+            return string
         def r_name(found):
             return self.cust_dict[found.group(0)]
 

@@ -1,5 +1,6 @@
 import re
 import logging
+import time
 import gradio as gr
 from pathlib import Path
 from lxml import etree
@@ -151,8 +152,16 @@ class FB2Processor:
         return result
 
     def parse_lines(self, parent: etree._Element, max_length: int = 200, remove_ru: bool = False, is_english: bool = False, translate: bool = False) -> None:
+        # Preserve the synchronous API for callers outside process_book.
+        for _ in self._iter_parse_lines(parent, max_length, remove_ru, is_english, translate):
+            pass
+
+    def _iter_parse_lines(self, parent, max_length=200, remove_ru=False, is_english=False, translate=False):
         elements = list(parent)
-        for elem in elements:
+        total = len(elements)
+        last_update = time.monotonic()
+        yield 0, total
+        for done, elem in enumerate(elements, 1):
             if self.stop_parsing: break
             if elem.text:
                 if remove_ru:
@@ -192,12 +201,16 @@ class FB2Processor:
                     for chunk in self.optimize_chunk(elem.text, max_length):
                         new_p = etree.Element("p")
                         new_p.text = chunk
-                        parent.insert(parent.index(elem), new_p)
+                        elem.addprevious(new_p)
                     parent.remove(elem)
                 elif not re.search(r'[а-яА-ЯёЁa-zA-Z0-9א-ת]', elem.text):
                     empty = etree.Element("empty-line")
-                    parent.insert(parent.index(elem), empty)
+                    elem.addprevious(empty)
                     parent.remove(elem)
+            now = time.monotonic()
+            if done == total or done % 50 == 0 or now - last_update >= 0.25:
+                yield done, total
+                last_update = now
 
     def check_cite(self, element: etree._Element, notes: Dict[str, str]) -> None:
         for cite_elem in element.xpath('./cite | ./poem | ./epigraph'):
@@ -261,6 +274,7 @@ class FB2Processor:
             return
 
         try:
+            yield 0, "📖 Reading FB2 and preparing sections..."
             root = self.remove_namespaces(fb2_file)
         except Exception as e:
             yield 0, f"❌ XML parsing error: {e}"
@@ -279,7 +293,7 @@ class FB2Processor:
 
         for idx, section_dict in enumerate(sections, start=1):
             if self.stop_parsing:
-                yield int((idx / total_sections) * 100), "🛑 Interrupted by user"
+                yield int(((idx - 1) / total_sections) * 100), "🛑 Interrupted by user"
                 return
 
             (f_name, sect_data), = section_dict.items()
@@ -328,7 +342,16 @@ class FB2Processor:
                         for s in sounds: p.addprevious(s)
                         p.getparent().remove(p)
 
-            self.parse_lines(element, max_length=ch_size, remove_ru=remove_ru, is_english=is_english, translate=translate)
+            for done, count in self._iter_parse_lines(
+                element, max_length=ch_size, remove_ru=remove_ru,
+                is_english=is_english, translate=translate
+            ):
+                percent = min(99, int(((idx - 1 + done / max(1, count)) / total_sections) * 100))
+                yield percent, f"📝 Section {idx}/{total_sections}: paragraphs {done}/{count}"
+            if self.stop_parsing:
+                # Never overwrite a valid section with half-processed text.
+                yield percent, "🛑 Interrupted by user"
+                return
 
             speak = etree.Element("speak", attrib={"autor": f"{metadata.first_name} {metadata.last_name}", "album": metadata.book_title})
             speak.extend(list(element))

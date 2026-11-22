@@ -67,6 +67,28 @@ class AppConfig:
     use_edge_russian: bool = False
     use_edge_hebrew: bool = True
     dict_mode: bool = False
+    join_overlap_sec: float = 0.055
+    trim_pad_sec: float = 0.03
+    trim_fade_sec: float = 0.02
+    # ── Audio generation policy (Settings → Audio & pauses) ──
+    generation_preset: str = "compact"
+    pause_intra_ms: int = 40
+    pause_sentence_ms: int = 280
+    pause_paragraph_ms: int = 450
+    pause_language_ms: int = 160
+    pause_learning_ms: int = 900
+    #: Longest silence allowed inside one synthesized fragment (TTS engines
+    #: breathe at commas on their own — this caps that air).
+    pause_internal_ms: int = 250
+    explicit_break_max_ms: int = 1400
+    edge_trim_ms: int = 30
+    micro_fade_ms: int = 8
+    lead_silence_ms: int = 0
+    use_accents: bool = True
+    # ── Standalone pause cleaner defaults ──
+    cleaner_preset: str = "compact"
+    cleaner_quality_kbps: int = 192
+    cleaner_trim_edges: bool = True
     completion_sound: str = "complete.wav"
     sound_done: bool = True  # 🔊 звуковой сигнал по завершению (отключаемый)
 

@@ -166,6 +166,8 @@ python start.py
 
 - [Setup guide](docs/SETUP.md) — clean-clone installation, model placement, verification
 - [Usage guide](docs/USAGE.md) — end-user guide to all tabs and features
+- [Руководство по аудиопаузам](docs/AUDIO_GUIDE_RU.md) — синтез и безопасная очистка MP3
+- [Инженерный отчёт об исправлении аудио](docs/AUDIO_REPAIR_REPORT_RU.md) — измерения и границы проверок
 - [NOTICE.md](NOTICE.md) — attribution and licensing notes
 
 ## Author

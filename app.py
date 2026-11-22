@@ -32,9 +32,10 @@ from libs.tts import synth, set_tts_device
 from libs.tts_preprocessor import TextParse
 from config import AppConfig
 import config as config_module
-from gr_tabs.parse_tab import parse_tab, get_all_projects_xml
+from gr_tabs.parse_tab import parse_tab, get_all_projects_xml, get_xml_files
 from gr_tabs.tts_tab import tts_tab
 from gr_tabs.settings_tab import settings_tab
+from gr_tabs.audio_tools_tab import audio_tools_tab
 from gr_tabs.cover_tab import cover_tab
 from gr_tabs.vocab_tab import vocab_tab
 from libs.russian import normalize_russian
@@ -60,14 +61,27 @@ from libs.fb2_processor import FB2Processor
 
 os.system("color")
 
-# ═══ ЗАГРУЗКА СОХРАНЁННЫХ ФЛАГОВ EDGE TTS ═══
+# ═══ ЗАГРУЗКА СОХРАНЁННЫХ ФЛАГОВ EDGE TTS И АУДИО-ПОЛИТИКИ ═══
 try:
     saved = AppConfig.load_user_settings()
     router.USE_EDGE_FOR_ENGLISH = getattr(saved, 'use_edge_english', False)
     router.USE_EDGE_FOR_RUSSIAN = getattr(saved, 'use_edge_russian', False)
     router.USE_EDGE_FOR_HEBREW = getattr(saved, 'use_edge_hebrew', True)
     router.DICTIONARY_MODE = getattr(saved, 'dict_mode', False)
+    router.apply_generation_settings({
+        "generation_preset": getattr(saved, 'generation_preset', router.DEFAULT_GENERATION_PRESET),
+        "pause_intra_ms": getattr(saved, 'pause_intra_ms', None),
+        "pause_sentence_ms": getattr(saved, 'pause_sentence_ms', None),
+        "pause_paragraph_ms": getattr(saved, 'pause_paragraph_ms', None),
+        "pause_language_ms": getattr(saved, 'pause_language_ms', None),
+        "pause_learning_ms": getattr(saved, 'pause_learning_ms', None),
+        "pause_internal_ms": getattr(saved, 'pause_internal_ms', None),
+        "explicit_break_max_ms": getattr(saved, 'explicit_break_max_ms', None),
+        "edge_trim_ms": getattr(saved, 'edge_trim_ms', None),
+        "micro_fade_ms": getattr(saved, 'micro_fade_ms', None),
+    })
 except Exception:
+    saved = AppConfig()
     pass  # fallback to defaults 
 
 class FullColorFormatter(logging.Formatter):
@@ -491,7 +505,18 @@ def clean_srt_timings(text):
     return text.strip()
 
 def toggle_tab(ab_path): return gr.Tabs(visible=True, selected=0), ab_path
-def toggle_tab_parse(ab_path): return gr.Tabs(visible=True, selected=1), ab_path
+def toggle_tab_parse(ab_path): return gr.Tabs(visible=True, selected="analyze"), ab_path
+
+def select_uploaded_next(ab_path, upload_status):
+    # Empty/failed queues must not navigate to a previously selected project.
+    if not ab_path or not upload_status or not str(upload_status).startswith("🎉"):
+        return gr.update(), gr.update()
+    # Auto-analysis is already done — open the voiceover tab ready for work.
+    return gr.Tabs(visible=True, selected="tts"), ab_path
+
+def show_project_tabs(ab_path):
+    # Programmatic project updates must not race explicit tab navigation.
+    return gr.update(visible=bool(ab_path)), ab_path
 def put_accents(string): return accentizer.process_accent(string, r'\+\w+|\w+\+\w+')
 
 def text_to_audio(string, spk, rate=1, noise=None, pitch=None, ref_audio=None, ref_text=''):
@@ -679,6 +704,38 @@ with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew")
         
         dict_mode_cb = gr.Checkbox(label="📚 Dictionary mode (long pauses)", value=router.DICTIONARY_MODE, info="1 sec breath between languages")
         
+        gr.Markdown("✂️ Audio pauses — applies to foreground and background generation")
+        with gr.Row():
+            gen_preset_sel = gr.Radio(
+                choices=["compact", "natural", "learning"],
+                value=getattr(saved, "generation_preset", "compact"),
+                label="Pause profile",
+                info="compact = tight narration (default) · natural = more air · learning = long study pauses",
+            )
+        with gr.Row():
+            overlap_slider = gr.Slider(
+                0.0, 0.5, value=router.PAUSE_LANGUAGE_MS / 1000.0, step=0.01,
+                label="Language-switch gap (s)",
+                info="Neutral pause between RU / EN / HE fragments. Speech is never cross-faded.",
+            )
+            pad_slider = gr.Slider(
+                0.0, 0.12, value=router.EDGE_TRIM_MS / 1000.0, step=0.005,
+                label="Edge trim pad (s)",
+                info="Silence kept around each synthesized fragment. 0.03 keeps quiet consonants.",
+            )
+            fade_slider = gr.Slider(
+                0.0, 0.05, value=router.MICRO_FADE_MS / 1000.0, step=0.002,
+                label="Anti-click fade (s)",
+                info="Micro fade at cut points only; it does not overlap speech.",
+            )
+        with gr.Row():
+            internal_slider = gr.Slider(
+                0.1, 1.2, value=router.PAUSE_INTERNAL_MS / 1000.0, step=0.01,
+                label="Max pause inside a phrase (s)",
+                info="The TTS model breathes on its own at commas and full stops. "
+                     "Anything longer than this is shortened. 0.25 = tight narration.",
+            )
+
         gr.Markdown("---")
         with gr.Row():
             restart_btn = gr.Button("🔄 Restart", variant="primary")
@@ -765,7 +822,7 @@ with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew")
                 
             with gr.Tabs(visible=False) as inner_tabs:
                 cover_tab(ab_path, ab_state)
-                file_content_box, parse_df_output = parse_tab(ab_path, acc_state, tts_state)
+                file_content_box, parse_df_output = parse_tab(ab_path, acc_state, tts_state, inner_tabs)
                 vocab_tab(ab_path, file_content_box)
                 tts_tab(ab_path, tts_state)
 
@@ -899,6 +956,8 @@ with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew")
         with gr.Tab("⚙️ Settings"):
             settings_tab(tts_state)
 
+        audio_tools_tab()
+
     # ==============================================================================
     # БЛОК ОБРАБОТЧИКОВ СОБЫТИЙ 
     # ==============================================================================
@@ -915,6 +974,30 @@ with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew")
     def set_dict_mode(val):
         router.DICTIONARY_MODE = val
         AppConfig.save_user_settings({'dict_mode': val})
+    def set_join_overlap(val):
+        ms = max(0, int(round(float(val) * 1000)))
+        router.PAUSE_LANGUAGE_MS = ms
+        AppConfig.save_user_settings({'pause_language_ms': ms})
+
+    def set_trim_pad(val):
+        ms = max(0, int(round(float(val) * 1000)))
+        router.EDGE_TRIM_MS = ms
+        AppConfig.save_user_settings({'edge_trim_ms': ms})
+
+    def set_trim_fade(val):
+        ms = max(0, int(round(float(val) * 1000)))
+        router.MICRO_FADE_MS = ms
+        AppConfig.save_user_settings({'micro_fade_ms': ms})
+
+    def set_pause_internal(val):
+        ms = max(0, int(round(float(val) * 1000)))
+        router.PAUSE_INTERNAL_MS = ms
+        AppConfig.save_user_settings({'pause_internal_ms': ms})
+
+    def set_generation_preset(name):
+        settings = router.apply_generation_settings(preset=name)
+        AppConfig.save_user_settings(settings)
+        gr.Info(f"Pause profile: {name}")
     
     def eco_preset():
         """Apply ECO mode: reduce workers, add cooldown, lower temp limit."""
@@ -966,6 +1049,11 @@ with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew")
     fast_eng_cb.change(set_fast_english, inputs=fast_eng_cb, outputs=[])
     fast_heb_cb.change(set_fast_hebrew, inputs=fast_heb_cb, outputs=[])
     dict_mode_cb.change(set_dict_mode, inputs=dict_mode_cb, outputs=[])
+    overlap_slider.release(set_join_overlap, inputs=overlap_slider, outputs=[])
+    pad_slider.release(set_trim_pad, inputs=pad_slider, outputs=[])
+    fade_slider.release(set_trim_fade, inputs=fade_slider, outputs=[])
+    internal_slider.release(set_pause_internal, inputs=internal_slider, outputs=[])
+    gen_preset_sel.change(set_generation_preset, inputs=gen_preset_sel, outputs=[])
 
     eco_btn.click(fn=eco_preset, outputs=tts_status)
     gpu_temp_timer.tick(fn=read_gpu_temp_display, outputs=gpu_temp_display)
@@ -994,9 +1082,9 @@ with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew")
         fn=process_file_wrapper, 
         inputs=[file_queue_state, upload_text_file, remove_ru_cb, bg_mode_cb, auto_open_upload_cb, sound_done_upload_cb], 
         outputs=[ab_path, load_project_dropdown, upload_progress_html, upload_status_text, file_queue_state, queue_table, queue_counter, upload_text_file]
-    )
-    sound_done_upload_cb.change(lambda v: AppConfig.save_user_settings({"sound_done": bool(v)}), inputs=sound_done_upload_cb, outputs=[]).then(toggle_tab_parse, inputs=ab_path, outputs=[inner_tabs, ab_state]
-    ).then(get_all_projects_xml, inputs=ab_path, outputs=parse_df_output)
+    ).then(select_uploaded_next, inputs=[ab_path, upload_status_text], outputs=[inner_tabs, ab_state], queue=False
+    ).then(get_xml_files, inputs=ab_path, outputs=parse_df_output)
+    sound_done_upload_cb.change(lambda v: AppConfig.save_user_settings({"sound_done": bool(v)}), inputs=sound_done_upload_cb, outputs=[])
     
     url_btn.click(
         fn=process_url_wrapper, 
@@ -1006,7 +1094,8 @@ with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew")
     
     rm_dataset.click(remove_dataset, inputs=ab_path, outputs=[ab_path, inner_tabs])
     rm_all_dataset.click(remove_all_datasets, outputs=[ab_path, inner_tabs])
-    ab_path.change(toggle_tab, inputs=ab_path, outputs=[inner_tabs, ab_state])
+    ab_path.change(show_project_tabs, inputs=ab_path, outputs=[inner_tabs, ab_state], queue=False)
+    ab_path.input(toggle_tab, inputs=ab_path, outputs=[inner_tabs, ab_state], queue=False)
     
     show_rename_btn.click(lambda: gr.update(visible=True), outputs=rename_proj_panel)
     confirm_rename_btn.click(

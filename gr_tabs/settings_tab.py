@@ -9,6 +9,7 @@ from libs.utils import get_data_list, models_path
 from libs.sql_db import sql_db
 from libs.tts.f5_backend import F5Model, prep_audio
 from config import config, AppConfig
+import libs.multilingual_router as router
 
 sound_dir = Path.cwd() / "sound"
 ev_path = sound_dir / 'events'
@@ -446,6 +447,92 @@ def settings_tab(tts_state):
                 fn=_save_nfe_steps,
                 inputs=f5_nfe_slider,
             )
+
+        with gr.Tab("🎚 Audio & pauses", id=47):
+            gr.Markdown(
+                "### Pause policy\n"
+                "These values control gaps between synthesized fragments. They are used by "
+                "**both** foreground and background generation, so long learning pauses never "
+                "sneak back into normal narration."
+            )
+            with gr.Row():
+                gen_preset_cfg = gr.Radio(
+                    choices=[("Compact (default)", "compact"), ("Natural", "natural"),
+                             ("Learning (long pauses)", "learning")],
+                    value=getattr(config, "generation_preset", "compact"),
+                    label="Generation pause profile",
+                )
+            with gr.Row():
+                pause_intra_cfg = gr.Slider(0, 300, value=getattr(config, "pause_intra_ms", 40), step=10,
+                                            label="Inside one sentence (ms)")
+                pause_sentence_cfg = gr.Slider(0, 1200, value=getattr(config, "pause_sentence_ms", 280), step=10,
+                                               label="Between sentences (ms)")
+            with gr.Row():
+                pause_paragraph_cfg = gr.Slider(0, 2000, value=getattr(config, "pause_paragraph_ms", 450), step=10,
+                                                label="Between paragraphs (ms)")
+                pause_language_cfg = gr.Slider(0, 1200, value=getattr(config, "pause_language_ms", 160), step=10,
+                                               label="When language changes (ms)")
+            with gr.Row():
+                pause_learning_cfg = gr.Slider(0, 3000, value=getattr(config, "pause_learning_ms", 900), step=10,
+                                               label="Dictionary / learning extra pause (ms)")
+                pause_internal_cfg = gr.Slider(100, 1200, value=getattr(config, "pause_internal_ms", 250), step=10,
+                                               label="Max pause inside a phrase (ms)",
+                                               info="The TTS engine breathes at commas on its own; longer runs are shortened to this.")
+                break_max_cfg = gr.Slider(0, 5000, value=getattr(config, "explicit_break_max_ms", 1400), step=50,
+                                          label="Maximum explicit <break> (ms)")
+            with gr.Row():
+                edge_trim_cfg = gr.Slider(0, 200, value=getattr(config, "edge_trim_ms", 30), step=5,
+                                          label="Edge trim pad (ms)")
+                micro_fade_cfg = gr.Slider(0, 60, value=getattr(config, "micro_fade_ms", 8), step=1,
+                                           label="Anti-click fade (ms)")
+                lead_silence_cfg = gr.Slider(0, 500, value=getattr(config, "lead_silence_ms", 0), step=10,
+                                             label="Lead-in silence (ms)")
+            gr.Markdown(
+                "### Standalone cleaner defaults\n"
+                "Used by the **✂️ Remove pauses** tab. The cleaner never overwrites the original MP3."
+            )
+            with gr.Row():
+                cleaner_preset_cfg = gr.Radio(
+                    choices=[("Compact (default)", "compact"), ("Natural", "natural"),
+                             ("Aggressive", "aggressive")],
+                    value=getattr(config, "cleaner_preset", "compact"),
+                    label="Default cleaner profile",
+                )
+                cleaner_quality_cfg = gr.Slider(64, 320, value=getattr(config, "cleaner_quality_kbps", 192),
+                                                step=16, label="Cleaned MP3 bitrate (kbps)")
+            cleaner_trim_cfg = gr.Checkbox(value=getattr(config, "cleaner_trim_edges", True),
+                                           label="Trim excessive silence at file start/end")
+
+            def _save_audio_policy(*values):
+                (gpreset, p_intra, p_sent, p_para, p_lang, p_learn,
+                 p_internal, bmax, etrim, mfade, lead, cpreset, cquality, ctrim) = values
+                updates = {
+                    "generation_preset": gpreset,
+                    "pause_intra_ms": int(p_intra),
+                    "pause_sentence_ms": int(p_sent),
+                    "pause_paragraph_ms": int(p_para),
+                    "pause_language_ms": int(p_lang),
+                    "pause_learning_ms": int(p_learn),
+                    "pause_internal_ms": int(p_internal),
+                    "explicit_break_max_ms": int(bmax),
+                    "edge_trim_ms": int(etrim),
+                    "micro_fade_ms": int(mfade),
+                    "lead_silence_ms": int(lead),
+                    "cleaner_preset": cpreset,
+                    "cleaner_quality_kbps": int(cquality),
+                    "cleaner_trim_edges": bool(ctrim),
+                }
+                router.apply_generation_settings(updates)
+                AppConfig.save_user_settings(updates)
+                gr.Info("Audio settings saved — used by foreground and background generation")
+
+            policy_inputs = [gen_preset_cfg, pause_intra_cfg, pause_sentence_cfg,
+                             pause_paragraph_cfg, pause_language_cfg, pause_learning_cfg,
+                             pause_internal_cfg, break_max_cfg, edge_trim_cfg, micro_fade_cfg,
+                             lead_silence_cfg, cleaner_preset_cfg, cleaner_quality_cfg,
+                             cleaner_trim_cfg]
+            save_audio_btn = gr.Button("💾 Save audio settings", variant="primary")
+            save_audio_btn.click(_save_audio_policy, inputs=policy_inputs, outputs=[])
 
         s_tabs.select(
             set_tab,

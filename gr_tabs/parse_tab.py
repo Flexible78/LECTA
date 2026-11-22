@@ -82,13 +82,13 @@ def show_file_content(data: gr.SelectData, ab_path: str):
 
 def del_file(filename: str, ab_path: str):
     if not filename or not ab_path: 
-        return get_all_projects_xml(), ""
+        return get_xml_files(ab_path), ""
     file_path = Path(filename)
     if file_path.exists():
         file_path.unlink()
         logger.info(f"🗑 Deleted XML file: {file_path.name}")
         gr.Info(f"Deleted: {file_path.name}", duration=2)
-    return get_all_projects_xml(), ""
+    return get_xml_files(ab_path), ""
 
 def magic_clean_xml(content, ab_path, cur_file):
     if not content or not cur_file: 
@@ -130,7 +130,7 @@ def parse_fb2_wrapper(
 ):
     if not ab_path or str(ab_path).startswith('<gradio'):
         gr.Warning("Please select a project from the list above!")
-        yield [], get_parse_metrics_html(0, "Error"), "❌ Error: No project selected"
+        yield [], get_parse_metrics_html(0, "Error"), "❌ Error: No project selected", gr.update()
         return
 
     AppConfig.save_user_settings({
@@ -139,23 +139,33 @@ def parse_fb2_wrapper(
     })
     
     global processor
-    processor = FB2Processor(accent=accent, single_vowel=single_vowel)
     
     xml_dir = data_path / str(ab_path) / "xml"
     xml_dir.mkdir(parents=True, exist_ok=True)
 
-    yield get_xml_files(ab_path), get_parse_metrics_html(0, "Initializing..."), "Initializing..."
+    yield get_xml_files(ab_path), get_parse_metrics_html(0, "Preparing text processor..."), "Preparing text processor...", gr.update()
 
     try:
+        processor = FB2Processor(accent=accent, single_vowel=single_vowel)
+        percent = 0
+        status_msg = ""
         # Процессор теперь возвращает процент и сообщение!
         for percent, status_msg in processor.process_book(
             ab_path=ab_path, replace=replace, sound_effect=sound_effect, punctuation=punctuation,
             translit=translit, ch_size=ch_size, remove_ru=remove_ru, is_english=is_english, translate=translate
         ):
-            yield get_xml_files(ab_path), get_parse_metrics_html(percent, status_msg), status_msg
+            # Paragraph updates must not rescan every project's XML directory.
+            yield gr.update(), get_parse_metrics_html(percent, status_msg), status_msg, gr.update()
+            if status_msg.startswith("❌"):
+                return
+
+        if processor.stop_parsing:
+            msg = "🛑 Stopped by user"
+            yield get_xml_files(ab_path), get_parse_metrics_html(percent, msg), msg, gr.update()
+            return
             
         if auto_clean_xml:
-            yield get_xml_files(ab_path), get_parse_metrics_html(95, "Cleaning XML..."), "✨ Auto-cleanup: removing junk..."
+            yield get_xml_files(ab_path), get_parse_metrics_html(95, "Cleaning XML..."), "✨ Auto-cleanup: removing junk...", gr.update()
             clean_album = re.sub(r'[\W_]*\d{6,}[\W_]*\d*$', '', ab_path)
             if len(clean_album) > 35: clean_album = clean_album[:35] + "..."
             if not clean_album: clean_album = ab_path[:20]
@@ -178,12 +188,14 @@ def parse_fb2_wrapper(
                 xml_file.write_text(content, encoding='utf-8')
 
         msg = "🛑 Stopped by user" if processor.stop_parsing else "✅ Completed"
-        yield get_xml_files(ab_path), get_parse_metrics_html(100, msg), msg
+        # Analysis finished successfully — hand the user straight to voiceover.
+        next_tab = gr.update() if processor.stop_parsing else gr.Tabs(visible=True, selected="tts")
+        yield get_xml_files(ab_path), get_parse_metrics_html(100, msg), msg, next_tab
         if not processor.stop_parsing:
             _play_done_sound()
     except Exception as e:
         logger.error(f"Error: {e}", exc_info=True)
-        yield get_xml_files(ab_path), get_parse_metrics_html(0, "Error"), f"❌ Error: {e}"
+        yield get_xml_files(ab_path), get_parse_metrics_html(0, "Error"), f"❌ Error: {e}", gr.update()
 
 def stop_parse():
     if processor: 
@@ -339,8 +351,94 @@ def _count_patterns(content: str, patterns_text: str, whole_line: bool, use_rege
     
     return content, '\n'.join(report_lines)
 
-def parse_tab(ab_path, acc_state, tts_state):
-    with gr.Tab("🔍 ANALYZE") as pr_tab:
+def archive_old_projects(current_project: str):
+    """Перемещает XML-файлы из ДРУГИХ проектов в папку _archive/current_project/."""
+    if not current_project or str(current_project).startswith('<gradio'):
+        return get_xml_files(current_project), "⚠️ Select a project first"
+    
+    archive_dir = data_path / "_archive" / str(current_project)
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    
+    moved_count = 0
+    for project_dir in sorted(data_path.iterdir()):
+        if not project_dir.is_dir() or project_dir.name == "_archive":
+            continue
+        if project_dir.name == str(current_project):
+            continue  # Пропускаем текущий проект
+        xml_dir = project_dir / "xml"
+        if not xml_dir.exists():
+            continue
+        for xml_file in xml_dir.glob("*.xml"):
+            dest = archive_dir / f"{project_dir.name}__{xml_file.name}"
+            try:
+                xml_file.rename(dest)
+                moved_count += 1
+            except Exception as e:
+                logger.warning(f"Failed to archive {xml_file.name}: {e}")
+    
+    if moved_count > 0:
+        msg = f"📦 Archived {moved_count} XML files from other projects to _archive/{current_project}/"
+        gr.Info(msg, duration=4)
+    else:
+        msg = "ℹ️ No old XML files from other projects found"
+    
+    return get_xml_files(current_project), msg, get_archive_list()
+
+
+def get_archive_list():
+    """Собирает список всех архивных папок и файлов."""
+    rows = []
+    archive_base = data_path / "_archive"
+    if not archive_base.exists():
+        return rows if rows else [["⚠️ Archive is empty"]]
+    
+    for archive_dir in sorted(archive_base.iterdir()):
+        if not archive_dir.is_dir():
+            continue
+        xml_files = list(archive_dir.glob("*.xml"))
+        if xml_files:
+            rows.append([f"📁 {archive_dir.name} ({len(xml_files)} files)"])
+            for f in sorted(xml_files):
+                rows.append([f"  └─ {f.name}"])
+    return rows if rows else [["⚠️ Archive is empty"]]
+
+
+def restore_from_archive(sel_idx, archive_data, current_project: str):
+    """Восстанавливает архивный файл в текущий проект."""
+    if sel_idx is None or not archive_data or not current_project:
+        return get_xml_files(current_project), "⚠️ Select an archive file first", get_archive_list()
+    
+    # Получаем имя файла из выбранной строки
+    try:
+        file_name = archive_data[sel_idx][0].strip().split("└─ ")[-1].strip()
+    except (IndexError, TypeError):
+        return get_xml_files(current_project), "⚠️ Invalid selection", get_archive_list()
+    
+    if not file_name or file_name.startswith("📁"):
+        return get_xml_files(current_project), "⚠️ Select a specific file (└─), not a folder", get_archive_list()
+    
+    # Ищем файл в архиве
+    archive_base = data_path / "_archive"
+    for archive_dir in archive_base.iterdir():
+        if not archive_dir.is_dir():
+            continue
+        src = archive_dir / file_name
+        if src.exists():
+            dest = data_path / current_project / "xml" / file_name
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                src.rename(dest)
+                msg = f"✅ Restored: {file_name} → {current_project}/xml/"
+                gr.Info(msg, duration=3)
+                return get_xml_files(current_project), msg, get_archive_list()
+            except Exception as e:
+                return get_xml_files(current_project), f"❌ Error: {e}", get_archive_list()
+    
+    return get_xml_files(current_project), f"❌ File not found in archive: {file_name}", get_archive_list()
+
+
+def parse_tab(ab_path, acc_state, tts_state, inner_tabs):
+    with gr.Tab("🔍 ANALYZE", id="analyze") as pr_tab:
         gr.Markdown("After changing the TTS model, you **must** re-process the fb2.")
         
         with gr.Row():
@@ -370,14 +468,15 @@ def parse_tab(ab_path, acc_state, tts_state):
                 stop_btn = gr.Button("🚫 Stop (Esc)")
         
         with gr.Row():
-            metrics_panel = gr.HTML(value=get_parse_metrics_html(0, "Waiting..."))
+            metrics_panel = gr.HTML(value=get_parse_metrics_html(0, "Ready — upload auto-analysis is shown in Upload status. Process text reruns analysis."))
             
         with gr.Group(elem_id="log_group"):
-            status = gr.Textbox(label="Live log", show_label=True, lines=1, interactive=False)
+            status = gr.Textbox(label="Live log", value="Ready. Uploaded books are analyzed automatically; use Process text only to apply changed options.", show_label=True, lines=1, interactive=False)
         
         with gr.Row():
             with gr.Column(scale=1, min_width=150):
                 refresh_btn = gr.Button("🔄 Refresh XML list")
+                archive_btn = gr.Button("📦 Archive other projects", variant="secondary")
                 df_output = gr.DataFrame(headers=['File name'], value=[], interactive=False, max_height=720, type='array')
                 del_btn = gr.Button("❌ Delete file (Delete)", interactive=False, elem_id="del_file_btn")
             
@@ -387,6 +486,15 @@ def parse_tab(ab_path, acc_state, tts_state):
                 with gr.Row():
                     save_btn = gr.Button("📝 Manual save (Ctrl+S)", elem_id="save_xml_btn")
                     magic_clean_btn = gr.Button("✨ Manual Auto-Clean", variant="secondary")
+                
+                # ── Archive viewer ──
+                with gr.Accordion("📦 Archive (old projects)", open=False):
+                    archive_refresh_btn = gr.Button("🔄 Refresh archive list", variant="secondary")
+                    archive_df = gr.DataFrame(headers=['Archived files'], value=[], interactive=False, max_height=300, type='array')
+                    selected_archive_row = gr.State(None)
+                    with gr.Row():
+                        restore_btn = gr.Button("♻️ Restore selected to current project", variant="secondary")
+                    archive_status = gr.Textbox(label="Archive status", lines=1, interactive=False)
                 
                 # ── BF11: Find & remove repeated fragments ──
                 undo_stack = gr.State([])
@@ -413,15 +521,15 @@ def parse_tab(ab_path, acc_state, tts_state):
 
     parse_btn.click(
         fn=lambda: (gr.update(value="⏳ Initializing..."), get_parse_metrics_html(0, "Starting...")), 
-        outputs=[status, metrics_panel]
+        outputs=[status, metrics_panel], queue=False
     ).then(
         fn=parse_fb2_wrapper,
         inputs=[ab_path, repl, ch_size, gender, sound_effect, accent, single_vowel, punctuation, translit, profanity, remove_ru, is_english, translate, auto_clean],
-        outputs=[df_output, metrics_panel, status]
+        outputs=[df_output, metrics_panel, status, inner_tabs]
     ).then(
-        fn=get_all_projects_xml, outputs=df_output
+        fn=get_xml_files, inputs=ab_path, outputs=df_output
     )
-    refresh_btn.click(fn=get_all_projects_xml, outputs=df_output)
+    refresh_btn.click(fn=get_xml_files, inputs=ab_path, outputs=df_output)
     
     # VIP QUEUE: Мгновенное прерывание с сохранением!
     stop_btn.click(stop_parse, outputs=[metrics_panel, status], queue=False)
@@ -488,6 +596,17 @@ def parse_tab(ab_path, acc_state, tts_state):
         outputs=[file_content, cleanup_report, undo_stack]
     )
 
-    pr_tab.select(fn=get_all_projects_xml, outputs=df_output)
+    archive_btn.click(fn=archive_old_projects, inputs=ab_path, outputs=[df_output, status, archive_df])
+    archive_refresh_btn.click(fn=get_archive_list, outputs=archive_df)
+    
+    def archive_select_row(data: gr.SelectData):
+        try:
+            return int(data.index[0])
+        except Exception:
+            return None
+    
+    archive_df.select(fn=archive_select_row, outputs=selected_archive_row)
+    restore_btn.click(fn=restore_from_archive, inputs=[selected_archive_row, archive_df, ab_path], outputs=[df_output, archive_status, archive_df])
+    pr_tab.select(fn=get_xml_files, inputs=ab_path, outputs=df_output)
     acc_state.change(fn=lambda: gr.update(interactive=True, value=False), outputs=accent)
     return file_content, df_output

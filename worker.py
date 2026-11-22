@@ -53,10 +53,17 @@ def _noop(*args, **kwargs):
     return None
 
 
-gr.update = _noop
-gr.Info = _noop
-gr.Warning = _noop
-gr.Error = _noop
+# Kept as a function (not module-level side effect): importing worker for tests
+# must not monkey-patch the real gradio module used by the GUI.
+_GRADIO_ORIGINALS: dict[str, object] = {}
+
+
+def install_headless_gradio_stubs() -> None:
+    """Replace the few Gradio UI helpers tts_tab calls with no-ops."""
+    for name in ("update", "Info", "Warning", "Error"):
+        if name not in _GRADIO_ORIGINALS:
+            _GRADIO_ORIGINALS[name] = getattr(gr, name, None)
+        setattr(gr, name, _noop)
 
 import shutil
 import traceback
@@ -72,6 +79,7 @@ from gr_tabs.tts_tab import (
     batch_tts_all_projects,
     parse_percent_from_html,
 )
+import gr_tabs.tts_tab as tts_module
 
 logger = logging.getLogger("LECTA-Worker")
 logger.setLevel(logging.INFO)
@@ -114,6 +122,7 @@ def run_parse(project, parse_cfg, replace=False):
     _set_status(stage="parse", project=project, pct=0, message=f"⏳ Parsing: {project}...")
     try:
         proc = FB2Processor()
+        ok = False
         for pct, msg in proc.process_book(
             ab_path=project,
             replace=replace,
@@ -122,17 +131,26 @@ def run_parse(project, parse_cfg, replace=False):
             translit=parse_cfg.get("translit", True),
             ch_size=parse_cfg.get("ch_size", 200),
         ):
+            text = str(msg or "")
+            if text.lstrip().startswith("❌"):
+                _set_status(stage="parse", project=project, message=text)
+                raise RuntimeError(text.lstrip("❌ ").strip())
+            ok = True
             _set_status(stage="parse", project=project, pct=pct, message=msg)
             if pct >= 100:
                 break
+        return ok
     except Exception as e:
         logger.error("Parse error %s: %s", project, e, exc_info=True)
         _set_status(stage="parse", project=project, message=f"⚠️ Parse error: {e}")
+        return False
 
 
 # ═══ STEP 2: TTS (XML → MP3) — reuses the exact same batch pipeline as the GUI ═══
 def run_tts(tts_cfg, projects):
     _set_status(stage="tts", message="🎙 Starting TTS...")
+    tts_module.LAST_BATCH_FAILURES = []
+    tts_module.LAST_BATCH_ERRORS = []
     gen = batch_tts_all_projects(
         tts_cfg.get("spk_sel") or "",
         tts_cfg.get("sp_rate", 1.0),
@@ -151,6 +169,7 @@ def run_tts(tts_cfg, projects):
             continue
         pct = parse_percent_from_html(str(tts_html)) if tts_html else 0
         _set_status(stage="tts", pct=pct, message=str(log_msg)[:300])
+    return list(tts_module.LAST_BATCH_FAILURES)
 
 
 # ═══ STEP 3: PACKAGE (3 files next to the source + open Explorer) ═══
@@ -205,13 +224,93 @@ def _extract_book_text(project) -> str:
     return "\n\n".join(paras)
 
 
-def build_package(project) -> Path | None:
-    """Create the 3-file package (mp3 + txt + source) next to the source file,
-    or in Downloads if the source is unavailable. Returns the output dir."""
+def _natural_key(name: str):
+    """Sort '2.mp3' before '10.mp3' instead of lexicographic order."""
+    import re as _re
+
+    return [int(t) if t.isdigit() else t.lower()
+            for t in _re.split(r"(\d+)", name)]
+
+
+def _project_mp3s(project) -> list[Path]:
+    mp3_dir = data_path / project / "mp3"
+    if not mp3_dir.exists():
+        return []
+    files = [p for p in mp3_dir.glob("*.mp3")
+             if p.is_file() and "_PARTIAL" not in p.name
+             and not p.name.startswith(".")]
+    return sorted(files, key=lambda p: _natural_key(p.name))
+
+
+def _combine_mp3s(mp3s: list[Path], target: Path) -> tuple[bool, str]:
+    """Concatenate chapters with ffmpeg (stream copy, falls back to re-encode).
+
+    Returns (ok, message).  The output is verified before the caller publishes it.
+    """
+    from libs.audio_tools import FFMPEG, CREATE_NO_WINDOW, verify_audio_file
+
+    if not mp3s:
+        return False, "No chapter MP3 files were produced"
+    list_file = target.with_name(f".{target.stem}.concat.txt")
+    lines = []
+    for p in mp3s:
+        # ffmpeg concat demuxer escaping
+        safe = str(p.resolve()).replace("'", "'\\''")
+        lines.append(f"file '{safe}'")
+    try:
+        list_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except Exception as e:
+        return False, f"Cannot write concat list: {e}"
+    expected = 0.0
+    try:
+        from libs.audio_tools import probe_audio
+        invalid = []
+        for p in mp3s:
+            info = probe_audio(str(p))
+            if not info.ok:
+                invalid.append(f"{p.name}: {info.error or 'unreadable'}")
+            expected += info.duration
+        if invalid:
+            return False, "Unreadable chapter(s): " + "; ".join(invalid[:3])
+        cmd = [FFMPEG, "-hide_banner", "-nostats", "-y", "-f", "concat",
+               "-safe", "0", "-i", str(list_file), "-vn",
+               "-c:a", "libmp3lame", "-b:a", "192k", "-ar", "24000", "-ac", "1",
+               "-id3v2_version", "3", "-f", "mp3", str(target)]
+        proc = __import__("subprocess").run(
+            cmd, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", creationflags=CREATE_NO_WINDOW, timeout=7200)
+        if proc.returncode != 0:
+            return False, f"ffmpeg concat failed: {(proc.stderr or '')[-300:]}"
+        check = verify_audio_file(str(target), expected_duration=expected, min_duration=1.0)
+        if not check.get("ok"):
+            return False, "Combined MP3 failed verification: " + "; ".join(check.get("errors") or [])
+        return True, f"{len(mp3s)} chapter(s), {expected:.1f}s"
+    except Exception as e:
+        return False, f"Concat error: {e}"
+    finally:
+        try:
+            list_file.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def build_package(project, failures: list[str] | None = None) -> Path | None:
+    """Build a verified 3-file package atomically.
+
+    Refuses to package a project whose TTS reported failures (otherwise the
+    package would silently contain a truncated or missing audio track).
+    Returns the published directory, or raises RuntimeError.
+    """
+    import uuid
+
     _set_status(stage="package", project=project, message=f"📦 Building package: {project}...")
     base = data_path / project
 
-    # 1) Determine the source file and target folder
+    project_failures = [f for f in (failures or []) if f.startswith(f"{project}::")]
+    if project_failures:
+        details = "; ".join(f.split("::", 1)[-1] for f in project_failures[:3])
+        raise RuntimeError(f"TTS failed for {project} — package not created ({details})")
+
     src = None
     src_info = base / "_source_path.txt"
     if src_info.exists():
@@ -235,53 +334,73 @@ def build_package(project) -> Path | None:
         except Exception:
             out_root = base
 
-    out_dir = out_root / f"{project} — аудиокнига"
+    final_dir = out_root / f"{project} — аудиокнига"
+    staging = out_root / f".lecta_pkg_{uuid.uuid4().hex[:8]}"
     try:
-        out_dir.mkdir(parents=True, exist_ok=True)
+        staging.mkdir(parents=True, exist_ok=False)
     except Exception as e:
-        logger.error("Package dir error: %s", e)
-        return None
+        raise RuntimeError(f"Cannot create staging folder: {e}")
 
-    # 2) File 1: combined mp3 (all chapters, sorted)
-    mp3_dir = base / "mp3"
-    mp3s = sorted(mp3_dir.glob("*.mp3")) if mp3_dir.exists() else []
-    mp3s = [m for m in mp3s if "_PARTIAL" not in m.name]
-    if mp3s:
-        try:
-            segments = [AudioSegment.from_file(str(m)) for m in mp3s]
-            combined = _concat_audio_segments(segments)
-            combined.export(
-                str(out_dir / f"{project}.mp3"), format="mp3", bitrate="192"
-            )
-        except Exception as e:
-            logger.error("MP3 combine error: %s", e)
-
-    # 3) File 2: full text
+    problems: list[str] = []
     try:
+        # 1) MP3
+        mp3s = _project_mp3s(project)
+        mp3_target = staging / f"{project}.mp3"
+        ok, msg = _combine_mp3s(mp3s, mp3_target)
+        if not ok:
+            problems.append(msg)
+        else:
+            logger.info("Package MP3: %s", msg)
+
+        # 2) Full text
         text = _extract_book_text(project)
-        if text.strip():
-            (out_dir / f"{project}.txt").write_text(text, encoding="utf-8")
-    except Exception as e:
-        logger.error("Text export error: %s", e)
+        if not text.strip():
+            problems.append("Book text could not be extracted")
+        else:
+            (staging / f"{project}.txt").write_text(text, encoding="utf-8")
 
-    # 4) File 3: source book file
-    if src is not None and src.exists():
-        try:
+        # 3) Source file
+        if src is None or not src.exists():
+            problems.append("Source book file is missing")
+        else:
             suffix = src.suffix.lower() or ".fb2"
-            shutil.copy2(src, out_dir / f"{project}{suffix}")
-        except Exception as e:
-            logger.error("Source copy error: %s", e)
+            shutil.copy2(src, staging / f"{project}{suffix}")
 
-    files_made = sorted(p.name for p in out_dir.iterdir())
-    _set_status(
-        stage="package",
-        project=project,
-        pct=100,
-        message=f"✅ Package ready: {out_dir}",
-        package_dir=str(out_dir),
-    )
-    logger.info("Package files: %s", files_made)
-    return out_dir
+        if problems:
+            raise RuntimeError("; ".join(problems))
+
+        # Publish atomically: keep the old package until the new one is complete.
+        backup = out_root / f".lecta_old_{uuid.uuid4().hex[:8]}"
+        moved_old = False
+        if final_dir.exists():
+            try:
+                final_dir.rename(backup)
+                moved_old = True
+            except Exception as e:
+                raise RuntimeError(f"Cannot replace existing package: {e}")
+        try:
+            staging.rename(final_dir)
+        except Exception as e:
+            if moved_old:
+                try:
+                    backup.rename(final_dir)
+                except Exception:
+                    pass
+            raise RuntimeError(f"Cannot publish package: {e}")
+        if moved_old:
+            shutil.rmtree(backup, ignore_errors=True)
+
+        files_made = sorted(p.name for p in final_dir.iterdir())
+        logger.info("Package files: %s", files_made)
+        _set_status(
+            stage="package", project=project, pct=100,
+            message=f"✅ Package ready: {final_dir}",
+            package_dir=str(final_dir),
+        )
+        return final_dir
+    except Exception:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
 
 
 def open_in_explorer(path: Path):
@@ -340,10 +459,15 @@ def main():
         router.USE_EDGE_FOR_HEBREW = bool(tts_cfg.get("use_edge_he", router.USE_EDGE_FOR_HEBREW))
         router.USE_EDGE_FOR_RUSSIAN = bool(tts_cfg.get("use_edge_ru", router.USE_EDGE_FOR_RUSSIAN))
         router.DICTIONARY_MODE = bool(tts_cfg.get("dict_mode", router.DICTIONARY_MODE))
+        router.apply_generation_settings(tts_cfg.get("audio") or {})
     except Exception:
         pass
 
     _set_status(stage="init", message=f"🚀 Worker started: {len(projects)} project(s)")
+
+    # Install only in the standalone process, after tests/importers have access
+    # to the unmodified Gradio module.
+    install_headless_gradio_stubs()
 
     try:
         # Load the TTS model (this process is independent — it loads its own)
@@ -360,22 +484,45 @@ def main():
 
         # 1) Parse
         repl = bool(tts_cfg.get("repl", True))
+        parse_failures = []
         for project in projects:
-            run_parse(project, parse_cfg, replace=repl)
+            if not run_parse(project, parse_cfg, replace=repl):
+                parse_failures.append(project)
 
         # 2) TTS
-        run_tts(tts_cfg, projects)
+        tts_failures = run_tts(tts_cfg, projects)
 
-        # 3) Package
+        # 3) Package — only verified projects are published.
         packaged = []
+        package_errors = []
         for project in projects:
+            if project in parse_failures:
+                package_errors.append(f"{project}: parsing failed")
+                continue
             try:
-                d = build_package(project)
+                d = build_package(project, failures=tts_failures)
                 if d:
                     packaged.append(d)
             except Exception as e:
                 logger.error("Package error %s: %s", project, e)
-                traceback.print_exc()
+                package_errors.append(f"{project}: {e}")
+
+        if package_errors:
+            _set_status(
+                state="error",
+                stage="done",
+                pct=100,
+                message="⚠️ Finished with errors: " + "; ".join(package_errors[:3]),
+                error="; ".join(package_errors),
+                package_dir=str(packaged[0]) if packaged else None,
+            )
+            auto_open = bool(tts_cfg.get("auto_open", True))
+            if auto_open:
+                for d in packaged:
+                    open_in_explorer(d)
+            if bool(job.get("sound_done", True)):
+                play_done_sound()
+            return 1
 
         _set_status(
             state="done",

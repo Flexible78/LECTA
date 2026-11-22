@@ -28,7 +28,7 @@ pymorphy3==2.0.6
 rjieba==0.2.0
 requests==2.32.5
 deep-translator>=1.11,<2.0
-edge-tts>=6.1,<7.0
+edge-tts>=7.3,<8.0
 
 # ==========================================
 # PROXY & ASYNC (backend proxy for Gemini API)

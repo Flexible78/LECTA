@@ -3,11 +3,14 @@ import logging
 import os
 import random
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 import time
-from collections import deque
+import traceback
+import uuid
+from collections import OrderedDict, deque
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 import threading
@@ -22,6 +25,7 @@ from libs.fb2_processor import FB2Processor
 from libs.thermal import get_gpu_temp
 from libs.multilingual_router import process_multilingual_text
 from libs.russian import normalize_russian
+from libs.audio_tools import verify_audio_file
 from libs.tts import get_device, get_model_short_name, synth
 from libs.tts_preprocessor import TextParse
 from libs.ui_assets import (
@@ -41,14 +45,29 @@ logger = logging.getLogger(__name__)
 sound_dir = now_dir / "sound"
 stop_text_to_sp = False
 _synthesis_completed = False
+#: Filled by batch_tts_all_projects so the background worker can refuse to
+#: package a project whose audio failed.
+LAST_BATCH_FAILURES: list[str] = []
+LAST_BATCH_ERRORS: list[str] = []
 txt_parser = TextParse(False)
 
 # ═══ ПЕРФ: глобальный executor + кэш сегментов (разделяется между проектами) ═══
 _tts_executor = ThreadPoolExecutor(max_workers=TTS_WORKERS)
 _tts_sema = threading.Semaphore(TTS_WORKERS)  # limits in-flight synthesis tasks
-_local_segment_cache = {}
+_local_segment_cache = OrderedDict()  # LRU: keeps memory bounded on long books
+_LOCAL_CACHE_MAX = 2000
 _local_cache_lock = threading.Lock()
 _local_tts_lock = threading.Lock()  # защита от GPU-конкуренции Silero/F5
+
+#: Duration probes (ffprobe) are slow and the file table is rebuilt often.
+_duration_cache: dict[str, tuple[int, int, float]] = {}
+_duration_cache_lock = threading.Lock()
+_PURE_RU_HINT = re.compile(r"[а-яА-ЯёЁ]")
+_NON_RU_SCRIPT = re.compile(r"[A-Za-z\u0590-\u05FF]")
+
+
+def _is_pure_russian(text: str) -> bool:
+    return bool(_PURE_RU_HINT.search(text or "")) and not _NON_RU_SCRIPT.search(text)
 
 # ═══ THERMAL AUTO-THROTTLE ═══
 _last_temp_poll = 0.0
@@ -182,11 +201,10 @@ def _short_name(name, max_len=24):
 
 def _concat_audio_segments(segments):
     """O(n) конкатенация AudioSegment через raw bytes (вместо O(n²) через оператор +).
-    Все сегменты приводятся к единому формату (24kHz / 16-bit / mono)."""
+    Все сегменты приводятся к единому формату (24kHz / 16-bit / mono).
+    Пустой список — это ошибка вызывающего, а не повод писать тишину."""
     if not segments:
-        return AudioSegment.silent(duration=1000, frame_rate=24000)
-    if len(segments) == 1:
-        return segments[0]
+        return AudioSegment.empty()
     ref = segments[0]
     frame_rate, sample_width, channels = ref.frame_rate, ref.sample_width, ref.channels
     parts = []
@@ -204,6 +222,99 @@ def _concat_audio_segments(segments):
         sample_width=sample_width,
         channels=channels,
     )
+
+
+def _trim_and_normalize_audio(audio, *, fade_ms: int = 8):
+    """Trim edge silence once per chapter and apply one global peak gain.
+
+    Per-chunk ``effects.normalize`` was removed: it pumped loudness between
+    batches and raised the noise floor.  This function works on the finished
+    chapter only, and never clips.
+    """
+    import math
+
+    if audio is None or len(audio) == 0:
+        raise RuntimeError("Empty audio result")
+    samples = np.frombuffer(audio.raw_data, dtype=np.int16)
+    if samples.size == 0:
+        raise RuntimeError("Empty audio result")
+    peak_sample = int(np.max(np.abs(samples)))
+    if peak_sample <= 0:
+        raise RuntimeError("Audio result is fully silent")
+    threshold = max(1, int(peak_sample * 0.002))
+    active = np.where(np.abs(samples) > threshold)[0]
+    if active.size == 0:
+        raise RuntimeError("Audio result is fully silent")
+    sr = audio.frame_rate
+    start = max(0, int(active[0]) - int(sr * 0.02))
+    end = min(len(samples), int(active[-1]) + int(sr * 0.05))
+    trimmed = samples[start:end]
+    n = min(int(sr * fade_ms / 1000), len(trimmed) // 4)
+    if n > 1:
+        ramp = np.linspace(0.0, 1.0, n)
+        trimmed = trimmed.copy()
+        trimmed[:n] = (trimmed[:n].astype(np.float32) * ramp).astype(np.int16)
+        trimmed[-n:] = (trimmed[-n:].astype(np.float32) * ramp[::-1]).astype(np.int16)
+    audio = AudioSegment(
+        trimmed.tobytes(), frame_rate=sr, sample_width=2, channels=1
+    )
+    # One global gain: only boost quiet material, never push above -1 dBFS.
+    peak_dbfs = audio.max_dBFS
+    if peak_dbfs < -1.0:
+        gain = min(12.0, -1.0 - peak_dbfs)
+        if gain > 0.1:
+            audio = audio.apply_gain(gain)
+    return audio
+
+
+def _export_mp3_atomic(out_audio, target_path, *, bitrate, cover_file=None, tags=None):
+    """Write, verify and atomically replace one MP3.
+
+    A previous valid file is never destroyed until the new file has passed
+    ffprobe + full-decode + audible-signal checks.
+    """
+    import os as _os
+
+    target = Path(target_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(f".{target.stem}.{uuid.uuid4().hex[:8]}.tmp.mp3")
+    try:
+        kwargs = {"format": "mp3", "bitrate": f"{int(bitrate)}"}
+        if cover_file and Path(cover_file).is_file():
+            kwargs["cover"] = str(cover_file)
+        if tags:
+            kwargs["tags"] = tags
+        exported = out_audio.export(str(tmp), **kwargs)
+        try:
+            exported.close()
+        except Exception:
+            pass
+        check = verify_audio_file(
+            str(tmp),
+            expected_duration=out_audio.duration_seconds,
+            min_duration=0.2,
+        )
+        if not check.get("ok"):
+            raise RuntimeError(
+                "Audio verification failed: " + "; ".join(check.get("errors") or ["unknown"])
+            )
+        _os.replace(tmp, target)
+        return check
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _save_partial_audio(segments, target_path, *, bitrate):
+    """Publish only verified audio; preserve any output from an earlier run."""
+    audio = _trim_and_normalize_audio(_concat_audio_segments(segments))
+    target = Path(target_path)
+    if target.exists():
+        target = target.with_name(f"{target.stem}_{uuid.uuid4().hex[:8]}_PARTIAL.mp3")
+    _export_mp3_atomic(audio, target, bitrate=bitrate)
+    return str(target)
 
 
 def parse_percent_from_html(html):
@@ -245,8 +356,7 @@ def get_project_stats(project_name):
             if "_PARTIAL" in mp3.name:
                 continue
             try:
-                info = mediainfo(str(mp3))
-                total_duration += float(info.get("duration", 0))
+                total_duration += _probe_duration(mp3)
                 total_size_mb += mp3.stat().st_size / (1024 * 1024)
             except Exception:
                 pass
@@ -279,14 +389,24 @@ def add_reverb(audio, room_size=0.3, wet_gain=-15, decay_rate=0.4):
 
 # ═══ ПЕРФ: статические хелперы для параллельного синтеза ═══
 
+def _apply_accents_gpu_safe(text: str) -> str:
+    """Accent marks must not compete with F5 for the same CUDA context."""
+    if getattr(accentizer, "accentizer", None) is None:
+        return text
+    try:
+        if get_device() == "cpu":
+            return accentizer.process_accent(text, r"\+\w+|\w+\+\w+")
+        with _local_tts_lock:
+            return accentizer.process_accent(text, r"\+\w+|\w+\+\w+")
+    except Exception:
+        return text
+
+
 def _safe_synth_static(text, speaker_id, speed, noise, use_accents, disable_norm=False):
     """Module-level safe_synth с кэшированием. Используется в потоках executor'а."""
     txt = text if disable_norm else txt_parser.garbage(normalize_russian(text))
-    if use_accents and not disable_norm:
-        try:
-            txt = accentizer.process_accent(txt, r"\+\w+|\w+\+\w+")
-        except Exception:
-            pass
+    if use_accents and not disable_norm and getattr(accentizer, "accentizer", None) is not None:
+        txt = _apply_accents_gpu_safe(txt)
     # ПЕРФ (CPU): F5-TTS inference steps напрямую определяют скорость на CPU.
     # Принудительно ограничиваем nfe_step до 8 на CPU — выше почти неразличимо по качеству, но в 2-4 раза медленнее.
     _is_cpu = get_device() == "cpu"
@@ -296,9 +416,10 @@ def _safe_synth_static(text, speaker_id, speed, noise, use_accents, disable_norm
         except Exception:
             pass
 
-    cache_key = f"{txt}|{speaker_id}|{speed}|{noise}"
+    cache_key = f"{synth.ver}|{txt}|{speaker_id}|{speed}|{noise}"
     with _local_cache_lock:
         if cache_key in _local_segment_cache:
+            _local_segment_cache.move_to_end(cache_key)
             return _local_segment_cache[cache_key]
     # ПЕРФ: блокировка нужна только на GPU (конкуренция за CUDA-контекст).
     # На CPU убираем её — иначе 4 worker'а сериализуются и скорость падает в N раз.
@@ -309,8 +430,8 @@ def _safe_synth_static(text, speaker_id, speed, noise, use_accents, disable_norm
             return synth.synth_audio(txt, speaker_id=speaker_id, speed=speed, noise=noise)
 
     # ── АНТИ-КРАШ: при сбое синтеза (OOM/температура) чистим кэш CUDA,
-    # ждём 2 сек и пробуем ещё раз. Если не вышло — возвращаем None вместо
-    # падения всего процесса (роутер вставит тишину).
+    # ждём 2 сек и пробуем ещё раз. Если не вышло — возвращаем None; router
+    # преобразует это в явную ошибку и не экспортирует файл с тишиной.
     res = None
     for attempt in range(2):
         try:
@@ -337,6 +458,8 @@ def _safe_synth_static(text, speaker_id, speed, noise, use_accents, disable_norm
         sr, aud_raw = 24000, a
     with _local_cache_lock:
         _local_segment_cache[cache_key] = (sr, aud_raw)
+        if len(_local_segment_cache) > _LOCAL_CACHE_MAX:
+            _local_segment_cache.popitem(last=False)
     return sr, aud_raw
 
 
@@ -346,8 +469,26 @@ def _execute_text_chunk(text, speaker_id, speed, noise, use_accents,
     Возвращает (sr, np_audio, elapsed_sec)."""
     t0 = time.time()
 
-    def synth_fn(t, disable_norm=False):
-        return _safe_synth_static(t, speaker_id, speed, noise, use_accents, disable_norm)
+    # ПЕРФ: для чисто русских чанков нормализация и ударения выполняются один
+    # раз на весь чанк, а не на каждый 110-символьный кусок внутри роутера.
+    prepared = None
+    if _is_pure_russian(text):
+        try:
+            prepared = txt_parser.garbage(normalize_russian(text))
+            if use_accents and getattr(accentizer, "accentizer", None) is not None:
+                prepared = _apply_accents_gpu_safe(prepared)
+        except Exception:
+            logger.warning("Bulk preprocessing failed, using per-chunk path", exc_info=True)
+            prepared = None
+
+    if prepared is not None:
+        text = prepared
+
+        def synth_fn(t, disable_norm=False):
+            return _safe_synth_static(t, speaker_id, speed, noise, False, disable_norm=True)
+    else:
+        def synth_fn(t, disable_norm=False):
+            return _safe_synth_static(t, speaker_id, speed, noise, use_accents, disable_norm)
 
     sr, np_audio = process_multilingual_text(
         text, synth_fn,
@@ -389,9 +530,8 @@ def tts(
             xml_files = list(xml_path.glob("*.xml"))
             if not xml_files or fb2_mtime > max(f.stat().st_mtime for f in xml_files):
                 need_parse = True
-        # Overwrite mode: всегда перепарсиваем FB2 → XML, а не только когда XML отсутствует/устарел
-        if repl and fb2_file.exists():
-            need_parse = True
+        # "Overwrite existing MP3" only overwrites audio: re-parse happens when
+        # XML is missing or older than the FB2 source, not on every run.
         if need_parse and fb2_file.exists():
             try:
                 fresh_config = AppConfig.load_user_settings()
@@ -425,6 +565,7 @@ def tts(
             "bitrate": bitrate,
             "noise_lvl": noise_lvl,
             "use_sound_effect": use_sound_effect,
+            "use_accents": use_accents,
         }
     )
 
@@ -432,6 +573,7 @@ def tts(
     stop_text_to_sp = False
     _synthesis_completed = False
     last_final_mp3_path = ""
+    failed_files: list[str] = []
 
     files = [x.stem for x in xml_path.glob("*.xml")]
 
@@ -444,6 +586,8 @@ def tts(
         }
         expected_stems = {Path(n).stem for n in expected_names}
         for old_mp3 in mp3_path.glob("*.mp3"):
+            if "_PARTIAL" in old_mp3.stem:
+                continue  # Recovery audio belongs to the user, not stale-output cleanup.
             if old_mp3.name not in expected_names:
                 try:
                     old_mp3.unlink()
@@ -453,7 +597,7 @@ def tts(
         # Чистим устаревшие записи в карте моделей и таймингах
         model_map = _load_model_map(ab_path)
         if model_map:
-            removed_keys = [k for k in model_map if k not in expected_stems]
+            removed_keys = [k for k in model_map if k not in expected_stems and "_PARTIAL" not in k]
             if removed_keys:
                 for k in removed_keys:
                     model_map.pop(k, None)
@@ -470,7 +614,7 @@ def tts(
                     pt = json.load(f)
                 if any(k not in expected_stems for k in pt):
                     with open(pt_file, "w", encoding="utf-8") as f:
-                        json.dump({k: v for k, v in pt.items() if k in expected_stems}, f, ensure_ascii=False)
+                        json.dump({k: v for k, v in pt.items() if k in expected_stems or "_PARTIAL" in k}, f, ensure_ascii=False)
             except Exception:
                 pass
 
@@ -536,16 +680,17 @@ def tts(
     )
 
     def _tts_to_audio(np_audio, sr):
-        """Конвертирует numpy-аудио в AudioSegment."""
-        if np_audio is not None and getattr(np_audio, "size", 0) > 0:
-            np_audio = np.nan_to_num(np_audio, nan=0.0, posinf=0.0, neginf=0.0)
-            np_audio = np.clip(np_audio, -1.0, 1.0)
-            final_audio_int16 = (np_audio * 32767).astype(np.int16)
-            audio = AudioSegment(
-                final_audio_int16.tobytes(), frame_rate=sr, sample_width=2, channels=1
-            )
-            return effects.normalize(audio)
-        return AudioSegment.silent(duration=500)
+        """Конвертирует numpy-аудио в AudioSegment (без per-chunk normalize)."""
+        if np_audio is None or getattr(np_audio, "size", 0) <= 0:
+            raise RuntimeError("Synthesis returned empty audio")
+        np_audio = np.nan_to_num(np_audio, nan=0.0, posinf=0.0, neginf=0.0)
+        np_audio = np.clip(np_audio, -1.0, 1.0)
+        if int(np.max(np.abs(np_audio)) * 32767) <= 0:
+            raise RuntimeError("Synthesis returned silent audio")
+        final_audio_int16 = (np_audio * 32767).astype(np.int16)
+        return AudioSegment(
+            final_audio_int16.tobytes(), frame_rate=int(sr), sample_width=2, channels=1
+        ).set_frame_rate(24000).set_channels(1)
 
     for file in sorted(files, key=safe_sort):
         if is_single_file:
@@ -589,17 +734,37 @@ def tts(
         album = root.get("album")
 
         was_interrupted = False
-        audio_segments = [
-            AudioSegment.silent(duration=1000, frame_rate=24000)
-        ]  # Начальная пауза 1 сек + накопление сегментов
+        try:
+            fresh_cfg = AppConfig.load_user_settings()
+            lead_ms = int(getattr(fresh_cfg, "lead_silence_ms", 0) or 0)
+        except Exception:
+            lead_ms = 0
+        lead_ms = max(0, min(lead_ms, 500))
+        audio_segments = [AudioSegment.silent(duration=lead_ms, frame_rate=24000)] if lead_ms else []
 
         # ── БУФЕР ДЛЯ ЯЗЫКОВО-ОСНОВАННОГО БАТЧИНГА + DEFERRED SYNTH ──
         text_buffer = []
         buffer_lang = None  # текущий язык буфера
         buffer_chars = 0  # суммарная длина символов в буфере
-        _BATCH_MAX_CHARS = 6000  # ПЕРФ: увеличен для лучшего F5-TTS параллелизма (Misha)
+        # ПЕРФ: F5-TTS держит GPU-лок, поэтому крупные задачи дают многоминутные
+        # «зависания» прогресса. Мелкие задачи — частые обновления и меньше VRAM.
+        _BATCH_MAX_CHARS = 600 if synth.ver in (5, 6) else 2000
         pending_tasks = []  # ПЕРФ: задачи синтеза + аудио-эффекты (в порядке)
         chunk_timings = []  # ПЕРФ: замеры времени на каждый чанк
+        last_task_kind = None
+        last_task_lang = None
+
+        def _take_gap(kind, lang):
+            """Return the gap (ms) that belongs *before* this task, then remember it."""
+            nonlocal last_task_kind, last_task_lang
+            if last_task_kind is None or last_task_kind in ("sound", "break") or kind in ("sound", "break"):
+                gap = 0
+            elif lang != last_task_lang:
+                gap = int(router.PAUSE_LANGUAGE_MS)
+            else:
+                gap = int(router.PAUSE_PARAGRAPH_MS)
+            last_task_kind, last_task_lang = kind, lang
+            return max(0, gap)
 
         def _submit_text_task(txt):
             """Submit a text chunk to the executor, throttled by semaphore.
@@ -646,12 +811,16 @@ def tts(
             if not text_buffer:
                 return
             joined = "\n".join(text_buffer)
+            lang = buffer_lang
             text_buffer.clear()
             buffer_lang = None
             buffer_chars = 0
-            # Отправляем в executor — синтез будет выполнен параллельно
+            gap = _take_gap("text", lang)
             f = _submit_text_task(joined)
-            pending_tasks.append({"type": "text", "future": f, "chars": len(joined)})
+            pending_tasks.append({
+                "type": "text", "future": f, "chars": len(joined),
+                "gap_ms": gap, "lang": lang, "text": joined,
+            })
 
         for i, line in enumerate(root):
             if stop_text_to_sp:
@@ -708,7 +877,7 @@ def tts(
                     rem_str,
                     (f"{speed:.1f} lines/s" if speed > 0 else "—"),
                 )
-                log_txt = f"📄 Preparing: {file}.xml\n📝 Line {current_line} of {total_lines}..."
+                log_txt = f"📄 Buffering for synthesis: {file}.xml — line {current_line} of {total_lines} (GPU is working)"
                 # НЕ вызываем get_files_list каждые 3 строки — это запускает ffprobe на всех MP3!
                 # Возвращаем кэшированный список вместо [] чтобы таблица не мигала.
                 yield cached_files_list, log_txt, html, gr.update(), _build_file_index(ab_path, cached_files_list)
@@ -717,10 +886,16 @@ def tts(
             audio = AudioSegment.empty()
             if line.tag == "sound" and use_sound_effect:
                 flush_text_buffer()
-                pending_tasks.append({"type": "sound", "value": line.get("value")})
+                _take_gap("sound", None)
+                pending_tasks.append({"type": "sound", "value": line.get("value"), "gap_ms": 0})
             elif line.tag == "break":
                 flush_text_buffer()
-                pending_tasks.append({"type": "break", "time": int(line.get("time"))})
+                _take_gap("break", None)
+                pending_tasks.append({
+                    "type": "break",
+                    "ms": router.explicit_break_ms(line.get("time")),
+                    "gap_ms": 0,
+                })
             elif (
                 line.tag in ("cite", "empty-line")
                 and use_sound_effect
@@ -739,7 +914,9 @@ def tts(
                     task_meta["empty_line"] = True
                 f = _submit_text_task(line.text)
                 task_meta["future"] = f
+                task_meta["text"] = line.text
                 task_meta["chars"] = len(line.text or "")
+                task_meta["gap_ms"] = _take_gap("text", _detect_lang(line.text))
                 pending_tasks.append(task_meta)
             elif line.text:
                 # Обычный текст: language-aware batching
@@ -750,7 +927,10 @@ def tts(
                 if line_lang == "mixed":
                     flush_text_buffer()
                     f = _submit_text_task(stripped)
-                    pending_tasks.append({"type": "text_inline", "future": f, "chars": len(stripped)})
+                    pending_tasks.append({
+                        "type": "text_inline", "future": f, "chars": len(stripped),
+                        "gap_ms": _take_gap("text", "mixed"), "text": stripped,
+                    })
                 else:
                     # Проверяем: можно ли добавить в текущий буфер?
                     can_batch = (
@@ -785,6 +965,9 @@ def tts(
         # Rolling average for ETA (last 10 completed tasks)
         chunk_times_deque = deque(maxlen=10)
         synthesis_failed = False
+        failure_reason = ""
+        failure_traceback = ""
+        task_index = 0
         
         # GPU temperature check before synthesis
         cool_msg = _wait_if_hot()
@@ -799,24 +982,30 @@ def tts(
         )
         
         try:
-            for task in pending_tasks:
+            for task_index, task in enumerate(pending_tasks, 1):
                 if stop_text_to_sp:
                     was_interrupted = True
-                    break
+                    # Phase A already synthesized futures. Recover the ready,
+                    # ordered prefix without waiting for more work after Stop.
+                    future = task.get("future")
+                    if future is not None and (not future.done() or future.cancelled()):
+                        break
                     
                 if task["type"] == "text":
                     sr, np_audio, elapsed = task["future"].result()
                     chunk_timings.append(elapsed)
                     chunk_times_deque.append(elapsed)
+                    audio = _tts_to_audio(np_audio, sr)
+                    gap = int(task.get("gap_ms", 0) or 0)
+                    if gap > 0 and audio_segments:
+                        audio_segments.append(AudioSegment.silent(duration=gap, frame_rate=24000))
+                    audio_segments.append(audio)
                     done_tasks += 1
                     done_chars += task.get("chars", 0)
-                    audio_segments.append(_tts_to_audio(np_audio, sr))
                 elif task["type"] == "text_inline":
                     sr, np_audio, elapsed = task["future"].result()
                     chunk_timings.append(elapsed)
                     chunk_times_deque.append(elapsed)
-                    done_tasks += 1
-                    done_chars += task.get("chars", 0)
                     audio = _tts_to_audio(np_audio, sr)
                     if task.get("cite"):
                         audio = add_reverb(audio)
@@ -828,13 +1017,21 @@ def tts(
                         pr = AudioSegment.from_wav(sound_dir / "pause" / "empty.wav")
                         pr = effects.normalize(pr)
                         audio = pr + audio
+                    gap = int(task.get("gap_ms", 0) or 0)
+                    if gap > 0 and audio_segments:
+                        audio_segments.append(AudioSegment.silent(duration=gap, frame_rate=24000))
                     audio_segments.append(audio)
+                    done_tasks += 1
+                    done_chars += task.get("chars", 0)
                 elif task["type"] == "sound":
                     sf = sound_dir / "events" / f"{task['value']}.wav"
+                    if not sf.is_file():
+                        raise RuntimeError(f"Sound effect not found: {sf.name}")
                     audio_segments.append(effects.normalize(AudioSegment.from_wav(str(sf))))
                 elif task["type"] == "break":
-                    slt = task["time"] * 100
-                    audio_segments.append(AudioSegment.silent(duration=slt))
+                    ms = int(task.get("ms", 0) or 0)
+                    if ms > 0:
+                        audio_segments.append(AudioSegment.silent(duration=ms, frame_rate=24000))
                 
                 # Throttled phase B progress yield
                 now_b = time.monotonic()
@@ -869,22 +1066,65 @@ def tts(
                         gr.update(),
                         _build_file_index(ab_path, cached_files_list),
                     )
-        except Exception:
-            logger.exception(f"Synthesis failed at chunk {done_tasks} of {total_tasks}")
+        except Exception as exc:
+            failure_reason = f"{type(exc).__name__}: {exc}"
+            failure_traceback = traceback.format_exc()
+            logger.exception("Synthesis failed after %s completed speech chunks", done_tasks)
             synthesis_failed = True
 
-        if synthesis_failed:
+        if synthesis_failed or was_interrupted or stop_text_to_sp:
+            # Never fall through to the complete-file exporter after a failure.
+            # Do not shut down the shared executor or cancel another job's work.
+            for pending in pending_tasks:
+                future = pending.get("future")
+                if future is not None:
+                    future.cancel()
+            if synthesis_failed:
+                if task.get("future") is not None:
+                    detail = f"Failed at chunk {done_tasks + 1} of {total_tasks}"
+                else:
+                    detail = f"Failed at audio task {task_index} after {done_tasks} of {total_tasks} speech chunks"
+                detail += f" in {short_final}.xml: {failure_reason}"
+                diagnostic = {
+                    "file": str(xml_file), "completed_chunks": done_tasks,
+                    "total_chunks": total_tasks, "task_index": task_index,
+                    "task_type": task.get("type"), "text": task.get("text", ""),
+                    "error": failure_reason, "traceback": failure_traceback,
+                }
+                try:
+                    diagnostic_path = work_dir / f"tts_failure_{uuid.uuid4().hex[:8]}.json"
+                    diagnostic_path.write_text(json.dumps(diagnostic, ensure_ascii=False, indent=2), encoding="utf-8")
+                    detail += f"\nDetails: {diagnostic_path.name}"
+                except Exception:
+                    logger.exception("Could not save synthesis failure details")
+            else:
+                detail = f"Stopped after {done_tasks} of {total_tasks} speech chunks"
+            LAST_BATCH_FAILURES.append(f"{ab_path}::{short_final}::{detail}")
+            recovered_path = ""
+            if done_tasks:
+                try:
+                    # Omit optional music/cover/effects here: a decoration must
+                    # never prevent recovery of already synthesized speech.
+                    recovered_path = _save_partial_audio(audio_segments, partial_mp3_file, bitrate=bitrate)
+                    _save_model_map_entry(ab_path, Path(recovered_path).stem, get_model_short_name(synth.ver))
+                    detail += f"\nPartial file saved as {Path(recovered_path).name}"
+                except Exception as exc:
+                    logger.exception("Partial MP3 recovery failed for %s", short_final)
+                    detail += f"\nPartial MP3 could not be saved: {type(exc).__name__}: {exc}"
+            else:
+                detail += "\nNo completed speech; no new MP3 was saved."
+            rows = get_files_list(ab_path)
             yield (
-                get_files_list(ab_path),
-                f"❌ Failed at chunk {done_tasks} of {total_tasks} in {short_final}.xml",
+                rows,
+                ("❌ " if synthesis_failed else "🛑 ") + detail,
                 get_metrics_html(
-                    99,
+                    min(99, 50 + int(min(1.0, done_chars / total_chars) * 49)),
                     format_time_hms(time.monotonic() - global_start_time),
                     "-",
-                    f"failed at chunk {done_tasks} of {total_tasks}",
+                    f"incomplete: {done_tasks} of {total_tasks}",
                 ),
-                gr.update(),
-                _build_file_index(ab_path, get_files_list(ab_path)),
+                _safe_audio(recovered_path) if recovered_path else gr.update(),
+                _build_file_index(ab_path, rows),
             )
             return
 
@@ -898,24 +1138,54 @@ def tts(
 
         # --- O(n) КОНКАТЕНАЦИЯ ВСЕХ СЕГМЕНТОВ (вместо O(n²) через оператор +) ---
         out_audio = _concat_audio_segments(audio_segments)
+        if len(out_audio) == 0:
+            logger.error("No audio segments produced for %s", short_final)
+            failed_files.append(short_final)
+            LAST_BATCH_FAILURES.append(f"{ab_path}::{short_final}::no audio produced")
+            yield (
+                get_files_list(ab_path),
+                f"❌ No audio produced for {short_final}.mp3 — nothing was saved",
+                get_metrics_html(99, format_time_hms(time.monotonic() - global_start_time), "-", "failed"),
+                gr.update(),
+                _build_file_index(ab_path, get_files_list(ab_path)),
+            )
+            continue
 
         # --- ФИНАЛЬНАЯ ОБРАБОТКА (Сработает даже при прерывании!) ---
         if back_sound_sel:
             back_sound_file = sound_dir / "back" / back_sound_sel
-            pr_audio = AudioSegment.from_wav(str(back_sound_file))
-            duration = pr_audio.duration_seconds
-            back_duration_ms = int(duration * 1000)
-            clip_length_ms = 16000
-
-            if back_duration_ms <= clip_length_ms:
-                st_poz = 0
+            if not back_sound_file.is_file():
+                logger.warning("Background music missing: %s", back_sound_file)
             else:
-                max_start = back_duration_ms - clip_length_ms
-                st_poz = random.randint(0, max_start)
+                pr_audio = AudioSegment.from_wav(str(back_sound_file))
+                duration = pr_audio.duration_seconds
+                back_duration_ms = int(duration * 1000)
+                clip_length_ms = 16000
 
-            pr_audio = pr_audio[st_poz : st_poz + clip_length_ms]
-            pr_audio = pr_audio.fade_out(8000).fade_in(3000) - 10
-            out_audio = out_audio.overlay(pr_audio, position=0)
+                if back_duration_ms <= clip_length_ms:
+                    st_poz = 0
+                else:
+                    max_start = back_duration_ms - clip_length_ms
+                    st_poz = random.randint(0, max_start)
+
+                pr_audio = pr_audio[st_poz : st_poz + clip_length_ms]
+                pr_audio = pr_audio.fade_out(8000).fade_in(3000) - 10
+                out_audio = out_audio.overlay(pr_audio, position=0)
+
+        try:
+            out_audio = _trim_and_normalize_audio(out_audio)
+        except Exception as e:
+            logger.error("Final audio processing failed for %s: %s", short_final, e)
+            failed_files.append(short_final)
+            LAST_BATCH_FAILURES.append(f"{ab_path}::{short_final}::processing: {e}")
+            yield (
+                get_files_list(ab_path),
+                f"❌ Audio rejected for {short_final}.mp3: {e}",
+                get_metrics_html(99, format_time_hms(time.monotonic() - global_start_time), "-", "failed"),
+                gr.update(),
+                _build_file_index(ab_path, get_files_list(ab_path)),
+            )
+            continue
 
         cover_file = work_dir / "cover.jpg"
         tags = {
@@ -928,16 +1198,26 @@ def tts(
         # Определяем имя файла (полное или частичное)
         save_path = str(partial_mp3_file) if was_interrupted else str(mp3_file)
 
-        if cover_file.exists():
-            out_audio.export(
+        try:
+            _export_mp3_atomic(
+                out_audio,
                 save_path,
-                format="mp3",
-                bitrate=f"{bitrate}",
-                cover=str(cover_file),
+                bitrate=bitrate,
+                cover_file=cover_file if cover_file.exists() else None,
                 tags=tags,
             )
-        else:
-            out_audio.export(save_path, format="mp3", bitrate=f"{bitrate}", tags=tags)
+        except Exception as e:
+            logger.exception("MP3 export/verify failed for %s", short_final)
+            failed_files.append(short_final)
+            LAST_BATCH_FAILURES.append(f"{ab_path}::{short_final}::export: {e}")
+            yield (
+                get_files_list(ab_path),
+                f"❌ Not saved: {short_final}.mp3 — {e}",
+                get_metrics_html(99, format_time_hms(time.monotonic() - global_start_time), "-", "export failed"),
+                gr.update(),
+                _build_file_index(ab_path, get_files_list(ab_path)),
+            )
+            continue
 
         # Запоминаем модель, использованную для этого файла (читаем synth.ver непосредственно перед сохранением)
         model_short = get_model_short_name(synth.ver)
@@ -945,12 +1225,18 @@ def tts(
         saved_stem = partial_mp3_file.stem if was_interrupted else mp3_file.stem
         _save_model_map_entry(ab_path, saved_stem, model_short)
 
-        last_final_mp3_path = str(mp3_file)
+        if not was_interrupted:
+            last_final_mp3_path = str(mp3_file)
 
         elapsed_file = time.monotonic() - file_start_time
         parse_times[str(saved_stem)] = elapsed_file
-        with open(times_file, "w", encoding="utf-8") as f:
-            json.dump(parse_times, f)
+        try:
+            tmp_times = times_file.with_suffix(".json.tmp")
+            with open(tmp_times, "w", encoding="utf-8") as f:
+                json.dump(parse_times, f)
+            tmp_times.replace(times_file)
+        except Exception:
+            pass
 
         if was_interrupted:
             yield (
@@ -990,17 +1276,45 @@ def tts(
             )
 
     # ФИНАЛ — only now can we show 100%
-    _synthesis_completed = True
-    gr.Info("Done")
+    _synthesis_completed = not failed_files
+    if failed_files:
+        gr.Warning(f"Failed: {', '.join(failed_files[:5])}")
+        final_msg = f"⚠️ Finished with {len(failed_files)} failed file(s): " + ", ".join(failed_files[:5])
+        final_pct = 99
+    else:
+        gr.Info("Done")
+        final_msg = "🎉 ALL FILES SUCCESSFULLY SYNTHESIZED!"
+        final_pct = 100
     yield (
         cached_files_list,
-        "🎉 ALL FILES SUCCESSFULLY SYNTHESIZED!",
+        final_msg,
         get_metrics_html(
-            100, format_time_hms(time.monotonic() - global_start_time), "00:00", "-"
+            final_pct, format_time_hms(time.monotonic() - global_start_time), "00:00", "-"
         ),
         _safe_audio(last_final_mp3_path),
         _build_file_index(ab_path, cached_files_list),
     )
+
+
+def _probe_duration(path: Path) -> float:
+    """ffprobe duration with a per-file cache (table refresh must stay instant)."""
+    try:
+        st = path.stat()
+        signature = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return 0.0
+    key = str(path)
+    with _duration_cache_lock:
+        cached = _duration_cache.get(key)
+    if cached is not None and cached[:2] == signature:
+        return cached[2]
+    try:
+        duration = float(mediainfo(str(path)).get("duration") or 0.0)
+    except Exception:
+        duration = 0.0
+    with _duration_cache_lock:
+        _duration_cache[key] = (*signature, duration)
+    return duration
 
 
 def get_files_list(ab_name):
@@ -1029,9 +1343,14 @@ def get_files_list(ab_name):
                 return (1, stem.lower())
 
         sorted_files = sorted(files, key=safe_sort)
+        # Probing hundreds of chapters serially froze the tab; run it in parallel
+        # and reuse cached results on every later refresh.
+        durations = {}
+        if sorted_files:
+            with ThreadPoolExecutor(max_workers=min(8, len(sorted_files))) as probe_pool:
+                durations = dict(zip(sorted_files, probe_pool.map(_probe_duration, sorted_files)))
 
         for file_path in sorted_files:
-            info = mediainfo(str(file_path))
             size_in_mb = round(file_path.stat().st_size / (1024 * 1024), 2)
             file_key = file_path.stem
             elapsed = parse_times.get(file_key, 0)
@@ -1041,12 +1360,15 @@ def get_files_list(ab_name):
             # Частичные файлы помечаем в колонке обработки
             if "_PARTIAL" in file_path.name:
                 ptime_str = "interrupted"
+            duration = durations.get(file_path, 0.0)
+            # Повреждённый/недописанный MP3: показываем строку, а не падаем
+            duration_str = format_audio_time(duration) if duration > 0 else "—"
             rows.append(
                 [
                     file_path.name,
                     model_label,
                     f"{size_in_mb}M",
-                    format_audio_time(float(info["duration"])),
+                    duration_str,
                     ptime_str,
                 ]
             )
@@ -1290,7 +1612,7 @@ def delete_selected_files(selected_filenames, ab_name, confirm_state, file_index
     gr.Info(f"🗑 Deleted {deleted} files" + (f", errors: {errors}" if errors else ""))
     return (
         new_df,
-        gr.update(value="🗑 Delete selected"),
+        gr.update(value="🗑 Delete selected files"),
         "idle",
         new_choices,
         file_index,
@@ -1309,6 +1631,176 @@ def download_current_file(file_path):
     if not file_path or not Path(file_path).is_file():
         raise gr.Error("File not found!")
     return gr.update(value=file_path)
+
+
+# ── УДАЛЕНИЕ ПРОЕКТОВ ИЗ ПАКЕТНОГО СПИСКА TTS ──
+# Внутренние каталоги LECTA никогда не считаются проектами.
+_PROTECTED_PROJECT_DIRS = {"tts_cache", "__pycache__", "_audio_tools", "_archive"}
+
+
+def _list_project_dirs():
+    """Реальные проекты в data_path (без служебных и скрытых каталогов).
+    Специально читает tts_tab.data_path, чтобы функцию можно было тестировать
+    на временном каталоге."""
+    base = Path(data_path)
+    if not base.is_dir():
+        return []
+    return sorted(
+        item.name
+        for item in base.iterdir()
+        if item.is_dir()
+        and item.name not in _PROTECTED_PROJECT_DIRS
+        and not item.name.startswith(("_", "."))
+    )
+
+
+def _bg_job_running() -> str:
+    """Имя проекта, который сейчас обрабатывает фоновый воркер, или ''.
+    Статус старше 15 минут считаем протухшим, чтобы упавший воркер не
+    блокировал удаление навсегда."""
+    try:
+        status_file = _bg_status_path()
+        if not status_file.exists():
+            return ""
+        if time.time() - status_file.stat().st_mtime > 15 * 60:
+            return ""
+        data = json.loads(status_file.read_text(encoding="utf-8"))
+        if str(data.get("state", "")).lower() in {"running", "starting"}:
+            return str(data.get("project") or "").strip() or "background job"
+    except Exception:
+        return ""
+    return ""
+
+
+def _busy_reason() -> str:
+    """Причина, по которой удалять проекты сейчас нельзя ('' = можно)."""
+    busy = _bg_job_running()
+    if busy:
+        return (
+            f"Background worker is busy with '{busy}'. "
+            "Wait for it to finish (or close the job) before deleting projects."
+        )
+    return ""
+
+
+def _real_project_names(names):
+    """Оставляет только существующие реальные проекты — защита от удаления
+    служебных каталогов и путей вида ../."""
+    available = set(_list_project_dirs())
+    result = []
+    for raw in names or []:
+        name = str(raw).strip()
+        if name in available and name not in result:
+            result.append(name)
+    return result
+
+
+def _delete_project_dirs(names):
+    """Удаляет каталоги проектов. Возвращает (deleted, errors)."""
+    deleted, errors = [], []
+    for name in names:
+        target = Path(data_path) / name
+        try:
+            if target.is_dir():
+                shutil.rmtree(target)
+                deleted.append(name)
+                logger.info("Project folder deleted: %s", target)
+        except Exception as exc:  # noqa: BLE001 - show the real OS error
+            errors.append(f"{name}: {exc}")
+            logger.error("Project delete failed %s: %s", target, exc)
+    return deleted, errors
+
+
+def _project_delete_view(keep_project, button_label):
+    """Обновления всех зависимых компонентов после удаления проектов."""
+    remaining = _list_project_dirs()
+    keep = keep_project if keep_project in remaining else ""
+    return (
+        gr.update(choices=remaining, value=[]),   # batch_project_sel: снимаем отметки
+        gr.update(choices=remaining, value=keep),  # ab_path: текущий проект (если жив)
+        [],                                        # df_output
+        {},                                        # batch_file_index_state
+        gr.update(choices=[], value=[]),           # file_checkboxes
+        gr.update(value=button_label),
+    )
+
+
+def delete_selected_projects(selected_projects, confirm_state, current_project, df_output, file_index):
+    """Удаляет отмеченные в списке проекты (двухкликовое подтверждение)."""
+    busy = _busy_reason()
+    if busy:
+        gr.Warning(busy)
+        return (gr.update(), gr.update(), df_output, file_index, gr.update(),
+                gr.update(value="🗑 Delete selected"), "idle")
+
+    names = _real_project_names(selected_projects)
+    if not names:
+        gr.Warning("Tick at least one project in the list first.")
+        return (gr.update(), gr.update(), df_output, file_index, gr.update(),
+                gr.update(value="🗑 Delete selected"), "idle")
+
+    if confirm_state != "confirm":
+        preview = ", ".join(names[:5]) + (f" … +{len(names) - 5}" if len(names) > 5 else "")
+        gr.Warning(
+            f"⚠️ Will permanently delete {len(names)} project(s) with all their files: "
+            f"{preview}. Click the button again to confirm."
+        )
+        return (
+            gr.update(),
+            gr.update(),
+            df_output,
+            file_index,
+            gr.update(),
+            gr.update(value=f"⚠️ Confirm: delete {len(names)} project(s)"),
+            "confirm",
+        )
+
+    deleted, errors = _delete_project_dirs(names)
+    for name in deleted:
+        logger.info("Deleted project: %s", name)
+    if errors:
+        gr.Warning(f"Deleted {len(deleted)} project(s), {len(errors)} error(s): " + "; ".join(errors[:3]))
+    else:
+        gr.Info(f"🗑 Deleted {len(deleted)} project(s): " + ", ".join(deleted[:5])
+                + (" …" if len(deleted) > 5 else ""))
+    return (*_project_delete_view(current_project, "🗑 Delete selected"), "idle")
+
+
+def delete_all_projects(confirm_state, current_project, df_output, file_index):
+    """Удаляет ВСЕ проекты из data_path (двухкликовое подтверждение)."""
+    busy = _busy_reason()
+    if busy:
+        gr.Warning(busy)
+        return (gr.update(), gr.update(), df_output, file_index, gr.update(),
+                gr.update(value="💣 Delete ALL projects"), "idle")
+
+    names = _list_project_dirs()
+    if not names:
+        gr.Warning("There are no projects to delete.")
+        return (gr.update(), gr.update(), df_output, file_index, gr.update(),
+                gr.update(value="💣 Delete ALL projects"), "idle")
+
+    if confirm_state != "confirm":
+        gr.Warning(
+            f"⚠️ This will permanently delete ALL {len(names)} projects with their audio, "
+            "text, covers and archives. Click again to confirm."
+        )
+        return (
+            gr.update(),
+            gr.update(),
+            df_output,
+            file_index,
+            gr.update(),
+            gr.update(value=f"⚠️ Confirm: delete ALL {len(names)} projects"),
+            "confirm",
+        )
+
+    deleted, errors = _delete_project_dirs(names)
+    if errors:
+        gr.Warning(f"Deleted {len(deleted)} project(s), {len(errors)} error(s): " + "; ".join(errors[:3]))
+    else:
+        gr.Info(f"💣 Deleted ALL {len(deleted)} project(s)")
+    return (*_project_delete_view("", "💣 Delete ALL projects"), "idle")
 
 
 def snd_list():
@@ -1462,6 +1954,12 @@ def _bg_status_path() -> Path:
     return Path(__file__).resolve().parent.parent / "tmp" / "bg_worker_status.json"
 
 
+def _bg_job_path() -> Path:
+    """Distinct from the status path — writing the job over the status file
+    used to make the worker read an empty job (and process every project)."""
+    return Path(__file__).resolve().parent.parent / "tmp" / "bg_worker_job.json"
+
+
 def _bg_worker_script() -> Path:
     return Path(__file__).resolve().parent.parent / "worker.py"
 
@@ -1510,9 +2008,12 @@ def launch_background_job(
         saved_back = getattr(fresh_cfg, "back_sound_sel", "")
         saved_bitrate = getattr(fresh_cfg, "bitrate", 96)
         saved_noise = getattr(fresh_cfg, "noise_lvl", 10)
+        saved_accents = bool(getattr(fresh_cfg, "use_accents", True))
+        saved_lead = int(getattr(fresh_cfg, "lead_silence_ms", 0) or 0)
     except Exception:
         ps_ch_size, ps_punctuation, ps_translit, ps_sound_effect = 200, False, True, False
         saved_spk, saved_rate, saved_back, saved_bitrate, saved_noise = "", 1.0, "", 96, 10
+        saved_accents, saved_lead = True, 0
 
     # Текущий выбор модели и облачные флаги
     model_ver = getattr(synth, "ver", None) or 5
@@ -1534,24 +2035,28 @@ def launch_background_job(
             "back_sound_sel": (back_sound_sel if back_sound_sel else saved_back) or "",
             "bitrate": int(bitrate if bitrate is not None else saved_bitrate),
             "noise_lvl": int(noise_lvl if noise_lvl is not None else saved_noise),
-            "use_sound_effect": bool(use_sound_effect) if use_sound_effect is not None else False,
-            "use_accents": bool(use_accents) if use_accents is not None else True,
+            "use_sound_effect": bool(use_sound_effect) if use_sound_effect is not None else bool(ps_sound_effect),
+            "use_accents": bool(use_accents) if use_accents is not None else saved_accents,
             "repl": bool(repl) if repl is not None else True,
             "use_edge_en": router.USE_EDGE_FOR_ENGLISH,
             "use_edge_he": router.USE_EDGE_FOR_HEBREW,
             "use_edge_ru": router.USE_EDGE_FOR_RUSSIAN,
             "dict_mode": router.DICTIONARY_MODE,
             "auto_open": True if auto_open is None else bool(auto_open),
+            "audio": router.generation_settings(),
+            "lead_silence_ms": saved_lead,
         },
         "sound_done": True if sound_done is None else bool(sound_done),
         "status_file": str(_bg_status_path()),
         "log_file": str(_bg_log_path()),
     }
 
-    job_file = _bg_status_path().with_suffix(".json")
+    job_file = _bg_job_path()
     try:
         job_file.parent.mkdir(parents=True, exist_ok=True)
-        job_file.write_text(json.dumps(job, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp_job = job_file.with_name(f".{job_file.name}.{uuid.uuid4().hex[:8]}.tmp")
+        tmp_job.write_text(json.dumps(job, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp_job, job_file)
     except Exception as e:
         raise gr.Error(f"Cannot write job file: {e}")
 
@@ -1646,6 +2151,9 @@ def batch_tts_all_projects(
 ):
     """Пакетная озвучка выбранных проектов.
     Если selected_projects не указан или пуст — берутся все проекты."""
+    global LAST_BATCH_FAILURES, LAST_BATCH_ERRORS
+    LAST_BATCH_FAILURES = []
+    LAST_BATCH_ERRORS = []
     if (
         selected_projects
         and isinstance(selected_projects, list)
@@ -2022,6 +2530,9 @@ def batch_tts_all_projects(
             batch_file_index[display_name] = str((data_path / project / "mp3" / filename).resolve())
             rc[0] = display_name
             all_files.append(rc)
+        project_failures = [x for x in LAST_BATCH_FAILURES if x.startswith(f"{project}::")]
+        if project_failures:
+            LAST_BATCH_ERRORS.extend(project_failures)
         if project_files:
             last_file_name = project_files[-1][0]
             if "_PARTIAL" not in last_file_name:
@@ -2045,16 +2556,24 @@ def batch_tts_all_projects(
     summary_table = get_batch_summary_html(batch_stats)
     final_html = summary_table + "\n" + final_bars if summary_table else final_bars
 
-    _synthesis_completed = True
+    _synthesis_completed = not LAST_BATCH_FAILURES
     # 📂 Автооткрытие папки с готовыми MP3 (по чекбоксу)
     if auto_open and all_projects:
         opened = open_folder_locally(data_path / all_projects[-1] / "mp3")
         if opened:
             logger.info("Opened MP3 folder: %s", data_path / all_projects[-1] / "mp3")
-    gr.Info("Done")
+    if LAST_BATCH_FAILURES:
+        gr.Warning(f"⚠️ {len(LAST_BATCH_FAILURES)} file(s) failed")
+        final_msg = (
+            f"⚠️ DONE with {len(LAST_BATCH_FAILURES)} failure(s): "
+            + ", ".join(x.split('::')[1] for x in LAST_BATCH_FAILURES[:5])
+        )
+    else:
+        gr.Info("Done")
+        final_msg = f"🎉 DONE! Synthesized {processed_count} of {total} projects"
     yield (
         all_files,
-        f"🎉 DONE! Synthesized {processed_count} of {total} projects",
+        final_msg,
         final_html,
         _safe_audio(last_final_mp3_path),
         batch_file_index,
@@ -2148,7 +2667,7 @@ def change_tts_model(mver):
 
 # === ОТРИСОВКА ВКЛАДКИ ===
 def tts_tab(ab_path, tts_state):
-    with gr.Tab(label="🎧 TTS", id=2) as tts_tab_ui:
+    with gr.Tab(label="🎧 Create Audiobook", id="tts") as tts_tab_ui:
         with gr.Row():
             # ── LEFT COLUMN: batch TTS block on top, then TTS controls ──
             with gr.Column(scale=5, min_width=320):
@@ -2162,6 +2681,26 @@ def tts_tab(ab_path, tts_state):
                 with gr.Row():
                     select_all_btn = gr.Button("Select all", size="sm", scale=1)
                     deselect_all_btn = gr.Button("Deselect all", size="sm", scale=1)
+
+                # ── Удаление проектов (выбранных / всех) ──
+                with gr.Row():
+                    del_projects_btn = gr.Button(
+                        "🗑 Delete selected", size="sm", variant="stop",
+                        scale=1, elem_id="del_projects_btn",
+                    )
+                    del_all_projects_btn = gr.Button(
+                        "💣 Delete ALL projects", size="sm", variant="stop",
+                        scale=1, elem_id="del_all_projects_btn",
+                    )
+                gr.Markdown(
+                    "<div style='font-size:12px;color:#94a3b8;margin-top:-6px;'>"
+                    "Deletes the ticked project folders (or all of them) after a second "
+                    "confirmation. Internal folders (<code>_archive</code>, "
+                    "<code>tts_cache</code>) are never touched."
+                    "</div>"
+                )
+                project_del_confirm = gr.State("idle")
+                project_del_all_confirm = gr.State("idle")
 
                 with gr.Row():
                     bg_run_btn = gr.Button(
@@ -2275,7 +2814,7 @@ def tts_tab(ab_path, tts_state):
 
                 with gr.Row():
                     dl_selected_btn = gr.Button("Download selected (zip)", size="sm", variant="primary")
-                    del_selected_btn = gr.Button("Delete selected", size="sm", variant="stop")
+                    del_selected_btn = gr.Button("🗑 Delete selected files", size="sm", variant="stop", elem_id="del_selected_files_btn")
                 dl_selected_output = gr.DownloadButton(visible=False, size="sm")
 
                 del_all_files_btn = gr.Button(
@@ -2331,7 +2870,7 @@ def tts_tab(ab_path, tts_state):
     # ── ФИКС B: удалить выбранные (с подтверждением) ──
     # Сброс подтверждения при изменении выбора файлов
     file_checkboxes.change(
-        fn=lambda: (gr.update(value="🗑 Delete selected"), "idle"),
+        fn=lambda: (gr.update(value="🗑 Delete selected files"), "idle"),
         outputs=[del_selected_btn, del_confirm_state],
     )
     del_selected_btn.click(
@@ -2387,6 +2926,33 @@ def tts_tab(ab_path, tts_state):
 
     select_all_btn.click(fn=select_all_projects, outputs=batch_project_sel)
     deselect_all_btn.click(fn=deselect_all_projects, outputs=batch_project_sel)
+
+    # ── Удаление выбранных / всех проектов (двухкликовое подтверждение) ──
+    def _reset_project_delete_confirm():
+        return (
+            gr.update(value="🗑 Delete selected"),
+            gr.update(value="💣 Delete ALL projects"),
+            "idle",
+            "idle",
+        )
+
+    batch_project_sel.change(
+        fn=_reset_project_delete_confirm,
+        outputs=[del_projects_btn, del_all_projects_btn, project_del_confirm, project_del_all_confirm],
+    )
+    del_projects_btn.click(
+        fn=delete_selected_projects,
+        inputs=[batch_project_sel, project_del_confirm, ab_path, df_output, batch_file_index_state],
+        outputs=[batch_project_sel, ab_path, df_output, batch_file_index_state,
+                 file_checkboxes, del_projects_btn, project_del_confirm],
+    )
+    del_all_projects_btn.click(
+        fn=delete_all_projects,
+        inputs=[project_del_all_confirm, ab_path, df_output, batch_file_index_state],
+        outputs=[batch_project_sel, ab_path, df_output, batch_file_index_state,
+                 file_checkboxes, del_all_projects_btn, project_del_all_confirm],
+    )
+
     tts_tab_ui.select(fn=refresh_project_list, outputs=batch_project_sel).then(
         snd_list, outputs=back_sound_sel
     )
@@ -2460,6 +3026,11 @@ def tts_tab(ab_path, tts_state):
         return rows, index
 
     tts_tab_ui.select(fn=_reset_table_on_tab, inputs=ab_path, outputs=[df_output, batch_file_index_state]).then(
+        fn=get_file_checkbox_choices, inputs=[ab_path, df_output], outputs=[file_checkboxes]
+    )
+    # При смене проекта сразу показываем ТОЛЬКО файлы выбранного проекта,
+    # а не накопленные файлы из предыдущих (batch) проектов.
+    ab_path.change(fn=_reset_table_on_tab, inputs=ab_path, outputs=[df_output, batch_file_index_state]).then(
         fn=get_file_checkbox_choices, inputs=[ab_path, df_output], outputs=[file_checkboxes]
     )
     tts_state.change(change_tts_model, inputs=tts_state, outputs=spk_sel)

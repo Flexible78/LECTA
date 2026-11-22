@@ -38,11 +38,14 @@ def get_data_list(d_path=data_path, r_glob=None, sort=None):
             files.sort(key=sort)
         return files
 
-    _EXCLUDE_DIRS = {"tts_cache", "__pycache__"}
+    _EXCLUDE_DIRS = {"tts_cache", "__pycache__", "_audio_tools", "_archive"}
     return [
         item.name
         for item in base_path.iterdir()
-        if item.is_dir() and item.name not in _EXCLUDE_DIRS
+        if item.is_dir()
+        and item.name not in _EXCLUDE_DIRS
+        and not item.name.startswith("_")
+        and not item.name.startswith(".")
     ]
 
 
