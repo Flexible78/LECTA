@@ -189,7 +189,9 @@ def parse_fb2_wrapper(
 
         msg = "🛑 Stopped by user" if processor.stop_parsing else "✅ Completed"
         # Analysis finished successfully — hand the user straight to voiceover.
-        next_tab = gr.update() if processor.stop_parsing else gr.Tabs(visible=True, selected="tts")
+        # Gradio 6 removed component-instance updates, so this must be a dict
+        # update; returning gr.Tabs(...) silently did nothing.
+        next_tab = gr.update() if processor.stop_parsing else gr.update(visible=True, selected="tts")
         yield get_xml_files(ab_path), get_parse_metrics_html(100, msg), msg, next_tab
         if not processor.stop_parsing:
             _play_done_sound()

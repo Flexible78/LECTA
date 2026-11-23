@@ -164,10 +164,21 @@ class UploadNavigationTests(unittest.TestCase):
             {'toggle_tab', 'toggle_tab_parse', 'select_uploaded_next', 'show_project_tabs'},
             dict(gr=gr))
 
-    def test_success_selects_voiceover_id(self):
+    def test_success_selects_the_analyze_tab(self):
+        # After an upload the book is parsed automatically, so the user lands on
+        # ANALYZE to check the split before voiceover. Gradio 6 no longer
+        # accepts a component instance as an update: it has to be a dict.
         tabs, state = self.env['select_uploaded_next']('Book', '🎉 All 1 projects parsed!')
-        self.assertEqual(tabs.selected, 'tts')
+        self.assertEqual(tabs.get('selected'), 'analyze')
+        self.assertTrue(tabs.get('visible'))
         self.assertEqual(state, 'Book')
+
+    def test_analyze_hands_over_to_voiceover(self):
+        import re
+        from pathlib import Path as _P
+        src = (_P(ROOT) / 'gr_tabs/parse_tab.py').read_text(encoding='utf-8-sig')
+        self.assertIn('gr.update(visible=True, selected="tts")', src)
+        self.assertNotIn('gr.Tabs(visible=True, selected="tts")', src)
 
     def test_empty_and_failed_upload_do_not_navigate(self):
         for project, status in [('OldBook', ''), ('', '🎉 done'), ('OldBook', '❌ failed')]:

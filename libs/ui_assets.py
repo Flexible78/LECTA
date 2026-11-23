@@ -579,7 +579,33 @@ body .gradio-container .sidebar label:focus-within .md {
   border-radius: var(--lecta-radius-sm);
   border: 1px solid var(--lecta-border);
   background: linear-gradient(180deg, var(--lecta-surface-2), var(--lecta-surface));
+  cursor: pointer;
+  transition: border-color 0.14s ease, background 0.14s ease, transform 0.14s ease;
 }
+.lecta-step:hover {
+  border-color: var(--lecta-border-strong);
+  background: linear-gradient(180deg, var(--lecta-surface-3), var(--lecta-surface-2));
+}
+.lecta-step:focus-visible {
+  outline: none;
+  border-color: var(--lecta-accent);
+  box-shadow: var(--lecta-focus);
+}
+/* the stage the user is on right now */
+.lecta-step.active {
+  border-color: var(--lecta-accent);
+  background: linear-gradient(180deg, rgba(217, 153, 47, 0.16), rgba(217, 153, 47, 0.05));
+  box-shadow: 0 2px 14px rgba(217, 153, 47, 0.18);
+}
+/* already behind us */
+.lecta-step.done { opacity: 0.72; }
+.lecta-step.done .lecta-step-num {
+  background: linear-gradient(180deg, var(--lecta-ok), #2f8f6d);
+  color: #04120e;
+}
+.lecta-step.done .lecta-step-num::after { content: "✓"; }
+.lecta-step.done .lecta-step-num { font-size: 0; }
+.lecta-step.done .lecta-step-num::after { font-size: 12px; font-weight: 800; }
 .lecta-step-num {
   flex: 0 0 20px;
   height: 20px;
@@ -594,6 +620,12 @@ body .gradio-container .sidebar label:focus-within .md {
 }
 .lecta-step-body { font-size: 12px; line-height: 1.35; color: var(--lecta-text-dim); }
 .lecta-step-body b { display: block; color: var(--lecta-text); font-size: 12.5px; }
+/* brief emphasis after a programmatic jump */
+.lecta-flash { animation: lecta-flash 1.1s ease; }
+@keyframes lecta-flash {
+  0% { box-shadow: 0 0 0 0 rgba(217, 153, 47, 0.55); }
+  100% { box-shadow: 0 0 0 14px rgba(217, 153, 47, 0); }
+}
 
 /* --- Help button (top right) --- */
 #lecta-help-btn {
@@ -999,6 +1031,192 @@ document.addEventListener('keydown', function(e) {
 </script>
 """
 
+_head_steps = """
+<script>
+// Clickable workflow strip. It follows the pipeline (upload → analyze → voice
+// → generate → done) and lets the user jump to any stage by clicking it.
+(function () {
+  function steps() { return document.querySelectorAll('.lecta-step'); }
+
+  function setStep(n) {
+    var items = steps();
+    for (var i = 0; i < items.length; i++) {
+      var s = parseInt(items[i].getAttribute('data-step'), 10);
+      items[i].classList.toggle('active', s === n);
+      items[i].classList.toggle('done', s < n);
+      if (s === n) { items[i].setAttribute('aria-current', 'step'); }
+      else { items[i].removeAttribute('aria-current'); }
+    }
+  }
+  window.lectaSetStep = setStep;
+
+  // Gradio 6 drops the `id` we give gr.Tab, so tabs are matched by their
+  // visible caption. Inner tabs are rendered deeper in the DOM than the
+  // top-level ones, so the deepest visible match wins.
+  var TAB_TEXT = {
+    'fb2tts': 'project manager',
+    'analyze': 'analyze',
+    'tts': 'create audiobook',
+    'cover': 'cover'
+  };
+
+  function depth(el) {
+    var d = 0;
+    while (el) { d += 1; el = el.parentElement; }
+    return d;
+  }
+
+  function clickTab(name) {
+    var tab = document.querySelector('[role="tab"][id="' + name + '"]');
+    if (!tab) {
+      var needle = TAB_TEXT[name] || name;
+      var best = null, bestDepth = -1;
+      var all = document.querySelectorAll('[role="tab"]');
+      for (var i = 0; i < all.length; i++) {
+        var t = all[i];
+        if (!t.getClientRects().length) { continue; }  // hidden
+        var txt = (t.textContent || '').toLowerCase();
+        if (txt.indexOf(needle) === -1) { continue; }
+        var d = depth(t);
+        if (d > bestDepth) { best = t; bestDepth = d; }
+      }
+      tab = best;
+    }
+    if (!tab) { return false; }
+    if (!tab.classList.contains('selected')) {
+      var btn = tab.querySelector('button') || tab;
+      btn.click();
+    }
+    return true;
+  }
+
+  function tabKind(tab) {
+    var txt = (tab.textContent || '').toLowerCase();
+    if (txt.indexOf('analyze') !== -1) { return 'analyze'; }
+    if (txt.indexOf('create audiobook') !== -1) { return 'tts'; }
+    if (txt.indexOf('cover') !== -1) { return 'cover'; }
+    return '';
+  }
+
+  function flash(el) {
+    if (!el) { return; }
+    try { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (e) { el.scrollIntoView(); }
+    el.classList.remove('lecta-flash');
+    void el.offsetWidth;  // restart the animation
+    el.classList.add('lecta-flash');
+    setTimeout(function () { el.classList.remove('lecta-flash'); }, 1200);
+  }
+
+  function openSidebar() {
+    var sb = document.querySelector('.sidebar');
+    if (sb && sb.getBoundingClientRect().x < 0) {
+      var btn = document.querySelector('button[aria-label="Toggle Sidebar"]');
+      if (btn) { btn.click(); }
+    }
+  }
+
+  function findVoiceSelect() {
+    // The TTS tab owns the voice list; matching it by caption avoids relying
+    // on the sidebar drawer (which Gradio keeps closed until clicked).
+    var nodes = document.querySelectorAll('[data-testid="block-info"], label, span');
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i];
+      if (!el.getClientRects().length) { continue; }
+      if ((el.textContent || '').trim().toLowerCase() === 'select main voice') {
+        var block = el.closest('.block') || el.parentElement;
+        if (block) { return block; }
+      }
+    }
+    return null;
+  }
+
+  function goto(target) {
+    switch (target) {
+      case 'upload':
+        clickTab('fb2tts');
+        flash(document.getElementById('file_queue_table'));
+        return true;
+      case 'analyze':
+        if (clickTab('analyze')) { return true; }
+        clickTab('fb2tts');
+        flash(document.getElementById('file_queue_table'));
+        return false;
+      case 'voice':
+        openSidebar();
+        if (clickTab('tts')) {
+          setTimeout(function () { flash(findVoiceSelect()); }, 300);
+          return true;
+        }
+        flash(document.querySelector('.sidebar'));
+        return true;
+      case 'tts':
+        return clickTab('tts');
+      case 'files':
+        clickTab('tts');
+        setTimeout(function () { flash(document.getElementById('file_checkboxes')); }, 300);
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  document.addEventListener('click', function (e) {
+    var t = e.target;
+    if (!t || !t.closest) { return; }
+
+    var step = t.closest('.lecta-step');
+    if (step) {
+      e.preventDefault();
+      var n = parseInt(step.getAttribute('data-step'), 10);
+      var ok = goto(step.getAttribute('data-goto'));
+      if (ok !== false) { setStep(n); }
+      return;
+    }
+
+    // keep the strip in sync when the user switches tabs by hand
+    var tab = t.closest('[role="tab"]');
+    if (!tab) { return; }
+    var kind = tabKind(tab);
+    if (kind === 'analyze') { setStep(2); }
+    else if (kind === 'tts') { setStep(4); }
+  }, true);
+
+  document.addEventListener('keydown', function (e) {
+    var t = e.target;
+    if (!t || !t.classList || !t.classList.contains('lecta-step')) { return; }
+    if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+      e.preventDefault();
+      t.click();
+    }
+  }, true);
+
+  // Gradio selects tabs programmatically after an upload/analysis, which fires
+  // no click event here — watch the tab container so the strip keeps up.
+  function syncFromTabs() {
+    var tabs = document.querySelectorAll('[role="tab"]');
+    for (var i = 0; i < tabs.length; i++) {
+      if (!tabs[i].classList.contains('selected')) { continue; }
+      var kind = tabKind(tabs[i]);
+      if (kind === 'analyze') { setStep(2); return; }
+      if (kind === 'tts') { setStep(4); return; }
+    }
+  }
+
+  var observer = new MutationObserver(syncFromTabs);
+  function observeTabs() {
+    var lists = document.querySelectorAll('[role="tablist"]');
+    for (var i = 0; i < lists.length; i++) {
+      if (lists[i].getAttribute('data-lecta-observed') === '1') { continue; }
+      lists[i].setAttribute('data-lecta-observed', '1');
+      observer.observe(lists[i], { subtree: true, attributes: true, attributeFilter: ['class'] });
+    }
+  }
+  observeTabs();
+  setInterval(observeTabs, 1500);  // inner tabs are rendered later, on demand
+})();
+</script>
+"""
+
 _head_dark = """
 <script>
 // LECTA is a dark-only product: Gradio would otherwise follow the OS and
@@ -1133,7 +1351,7 @@ _head_help = """
 </script>
 """
 
-custom_head = _head_dark + _head_i18n + _head_hotkeys + _head_help
+custom_head = _head_dark + _head_i18n + _head_hotkeys + _head_steps + _head_help
 
 
 # ═══ TIME FORMATTERS ═══
@@ -1441,21 +1659,26 @@ def help_overlay_html() -> str:
 
 
 def workflow_steps_html(active: int = 1) -> str:
-    """Compact 5-step strip that explains the whole pipeline at a glance."""
+    """Clickable 5-step strip: it follows the pipeline and navigates on click."""
     steps = [
-        ("Add a book", "Upload it or paste a URL — the book is parsed automatically"),
-        ("Analyze", "Split into chapters and build the XML for the voice"),
-        ("Pick a voice", "Sidebar: model, language flags, pauses"),
-        ("Generate", "TTS (one project) or Batch TTS (many)"),
-        ("Done", "MP3 + player; the package opens in Explorer"),
+        ("Add a book", "Upload it or paste a URL — the book is parsed automatically", "upload"),
+        ("Analyze", "Split into chapters and build the XML for the voice", "analyze"),
+        ("Pick a voice", "Sidebar: model, language flags, pauses", "voice"),
+        ("Generate", "TTS (one project) or Batch TTS (many)", "tts"),
+        ("Done", "MP3 + player; the package opens in Explorer", "files"),
     ]
     cells = []
-    for i, (title, hint) in enumerate(steps, 1):
-        style = " style='border-color:var(--lecta-accent);'" if i == active else ""
+    for i, (title, hint, target) in enumerate(steps, 1):
+        cls = "lecta-step"
+        if i == active:
+            cls += " active"
+        elif i < active:
+            cls += " done"
         cells.append(
-            f"<div class='lecta-step'{style}>"
+            f"<div class='{cls}' data-step='{i}' data-goto='{target}' "
+            f"role='button' tabindex='0' title='{title} — click to jump here'>"
             f"<span class='lecta-step-num'>{i}</span>"
             f"<span class='lecta-step-body'><b>{title}</b>{hint}</span>"
             "</div>"
         )
-    return "<div class='lecta-steps'>" + "".join(cells) + "</div>"
+    return "<div class='lecta-steps' id='lecta-steps'>" + "".join(cells) + "</div>"

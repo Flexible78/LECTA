@@ -507,15 +507,18 @@ def clean_srt_timings(text):
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 
-def toggle_tab(ab_path): return gr.Tabs(visible=True, selected=0), ab_path
-def toggle_tab_parse(ab_path): return gr.Tabs(visible=True, selected="analyze"), ab_path
+def toggle_tab(ab_path): return gr.update(visible=True, selected=0), ab_path
+def toggle_tab_parse(ab_path): return gr.update(visible=True, selected="analyze"), ab_path
 
 def select_uploaded_next(ab_path, upload_status):
     # Empty/failed queues must not navigate to a previously selected project.
     if not ab_path or not upload_status or not str(upload_status).startswith("🎉"):
         return gr.update(), gr.update()
-    # Auto-analysis is already done — open the voiceover tab ready for work.
-    return gr.Tabs(visible=True, selected="tts"), ab_path
+    # Auto-analysis is already done — open ANALYZE so the split can be checked,
+    # then pressing Analyze hands the user over to voiceover.
+    # Gradio 6 dropped component-instance updates: `gr.Tabs(selected=...)` as a
+    # return value is silently ignored, which is why nothing moved any more.
+    return gr.update(visible=True, selected="analyze"), ab_path
 
 def show_project_tabs(ab_path):
     # Programmatic project updates must not race explicit tab navigation.

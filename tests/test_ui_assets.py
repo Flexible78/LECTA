@@ -62,12 +62,29 @@ class HelpOverlayTests(unittest.TestCase):
 
 
 class WorkflowGuideTests(unittest.TestCase):
-    def test_five_steps_with_active_one(self):
+    def test_five_clickable_steps(self):
         html = ui.workflow_steps_html(2)
-        self.assertEqual(html.count("<div class='lecta-step'"), 5)
-        self.assertEqual(html.count("style='border-color:var(--lecta-accent);'"), 1)
+        self.assertEqual(html.count("data-step="), 5)
+        self.assertEqual(html.count("data-goto="), 5)
+        self.assertEqual(html.count("role='button'"), 5)
+        self.assertIn("class='lecta-step active'", html)   # current stage
+        self.assertIn("class='lecta-step done'", html)     # stage 1 is behind us
         for title in ("Add a book", "Analyze", "Pick a voice", "Generate", "Done"):
             self.assertIn(f"<b>{title}</b>", html)
+
+    def test_steps_target_real_tabs(self):
+        html = ui.workflow_steps_html(1)
+        for target in ("upload", "analyze", "voice", "tts", "files"):
+            self.assertIn(f"data-goto='{target}'", html)
+        self.assertIn("id='lecta-steps'", html)
+
+    def test_stage_follows_the_pipeline_in_the_head_script(self):
+        js = ui.custom_head
+        self.assertIn("window.lectaSetStep", js)
+        self.assertIn("classList.toggle('active'", js)
+        # clicking a step must switch tabs, not just change colour
+        self.assertIn("clickTab('analyze')", js)
+        self.assertIn("clickTab('tts')", js)
 
 
 class ThemeTests(unittest.TestCase):
