@@ -161,17 +161,27 @@ class UploadNavigationTests(unittest.TestCase):
 
     def setUp(self):
         self.env = load_definitions(ROOT / 'app.py',
-            {'toggle_tab', 'toggle_tab_parse', 'select_uploaded_next', 'show_project_tabs'},
+            {'toggle_tab', 'toggle_tab_parse', 'select_uploaded_next', 'show_project_tabs',
+             'open_analyze_tab'},
             dict(gr=gr))
 
-    def test_success_selects_the_analyze_tab(self):
+    def test_success_shows_the_tab_container_then_selects_analyze(self):
         # After an upload the book is parsed automatically, so the user lands on
         # ANALYZE to check the split before voiceover. Gradio 6 no longer
         # accepts a component instance as an update: it has to be a dict.
+        # Visibility and selection must arrive in two separate responses,
+        # otherwise the tab is marked selected but its panel is never mounted.
         tabs, state = self.env['select_uploaded_next']('Book', '🎉 All 1 projects parsed!')
-        self.assertEqual(tabs.get('selected'), 'analyze')
         self.assertTrue(tabs.get('visible'))
+        self.assertNotIn('selected', tabs)
         self.assertEqual(state, 'Book')
+
+    def test_analyze_selection_happens_in_its_own_step(self):
+        upd = self.env['open_analyze_tab']()
+        self.assertEqual(upd.get('selected'), 'analyze')
+        self.assertTrue(upd.get('visible'))
+        src = (ROOT / 'app.py').read_text(encoding='utf-8-sig')
+        self.assertIn('.then(open_analyze_tab, outputs=[inner_tabs], queue=False)', src)
 
     def test_analyze_hands_over_to_voiceover(self):
         import re
@@ -179,6 +189,9 @@ class UploadNavigationTests(unittest.TestCase):
         src = (_P(ROOT) / 'gr_tabs/parse_tab.py').read_text(encoding='utf-8-sig')
         self.assertIn('gr.update(visible=True, selected="tts")', src)
         self.assertNotIn('gr.Tabs(visible=True, selected="tts")', src)
+        # the selection is a separate response, same as for ANALYZE
+        self.assertIn('def _select_after_parse():', src)
+        self.assertIn('fn=_select_after_parse, outputs=[inner_tabs], queue=False', src)
 
     def test_empty_and_failed_upload_do_not_navigate(self):
         for project, status in [('OldBook', ''), ('', '🎉 done'), ('OldBook', '❌ failed')]:
@@ -190,6 +203,29 @@ class UploadNavigationTests(unittest.TestCase):
         self.assertNotIn('selected', tabs)
         self.assertTrue(tabs['visible'])
         self.assertEqual(state, 'Book')
+
+    def test_analyze_tab_opens_its_data_too(self):
+        # Selecting the tab is not enough: the user expects the split files and
+        # the first fragment to be there, not an empty table.
+        src = (ROOT / 'gr_tabs/parse_tab.py').read_text(encoding='utf-8-sig')
+        self.assertIn('def open_analysis_data(ab_path):', src)
+        self.assertIn('pr_tab.select(fn=open_analysis_data', src)
+        self.assertIn('outputs=[df_output, file_content, del_btn, cur_file]', src)
+
+    def test_open_analysis_data_returns_rows_and_content(self):
+        import gr_tabs.parse_tab as pt
+        rows, content, del_btn, cur_file = pt.open_analysis_data('Doronichev_A_Novaya_Versiya_Izmeni_Seb')
+        self.assertTrue(rows and rows[0])
+        self.assertIn('<', content)
+        self.assertTrue(del_btn.get('interactive'))
+        self.assertTrue(cur_file.endswith('.xml'))
+
+    def test_url_import_also_lands_on_analyze(self):
+        src = (ROOT / 'app.py').read_text(encoding='utf-8-sig')
+        self.assertIn(
+            '.then(toggle_tab_parse, inputs=ab_path, outputs=[inner_tabs, ab_state]\n    ).then(open_analyze_tab, outputs=[inner_tabs], queue=False)',
+            src,
+        )
 
     def test_real_gradio_event_graph_attaches_navigation_to_upload_only(self):
         tree = ast.parse((ROOT / 'app.py').read_text(encoding='utf-8-sig'))

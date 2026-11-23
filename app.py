@@ -508,17 +508,24 @@ def clean_srt_timings(text):
     return text.strip()
 
 def toggle_tab(ab_path): return gr.update(visible=True, selected=0), ab_path
-def toggle_tab_parse(ab_path): return gr.update(visible=True, selected="analyze"), ab_path
+def toggle_tab_parse(ab_path): return gr.update(visible=True), ab_path
+
+def open_analyze_tab():
+    """Select ANALYZE in a response of its own.
+
+    Gradio 6 marks a tab as selected but does not mount its panel when the
+    visibility flip and the selection arrive in the same update — the tab looked
+    chosen while the whole analysis section stayed empty.
+    """
+    return gr.update(visible=True, selected="analyze")
 
 def select_uploaded_next(ab_path, upload_status):
     # Empty/failed queues must not navigate to a previously selected project.
     if not ab_path or not upload_status or not str(upload_status).startswith("🎉"):
         return gr.update(), gr.update()
-    # Auto-analysis is already done — open ANALYZE so the split can be checked,
-    # then pressing Analyze hands the user over to voiceover.
-    # Gradio 6 dropped component-instance updates: `gr.Tabs(selected=...)` as a
-    # return value is silently ignored, which is why nothing moved any more.
-    return gr.update(visible=True, selected="analyze"), ab_path
+    # Auto-analysis is already done — open ANALYZE so the split can be checked.
+    # The tab itself is selected by open_analyze_tab() in the next step.
+    return gr.update(visible=True), ab_path
 
 def show_project_tabs(ab_path):
     # Programmatic project updates must not race explicit tab navigation.
@@ -716,6 +723,7 @@ with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew")
             tts_sel = gr.Dropdown(
                 value='', allow_custom_value=True, label='Select TTS model',
                 choices=tts_models_list, interactive=True,
+                elem_id='tts_model_sel',
                 info="ESpeech-TTS = best Russian/English quality · Silero = ~10× faster · "
                      "Vosk = draft only · Edge flags (below) = instant cloud voice",
             )
@@ -723,6 +731,7 @@ with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew")
             acc_sel = gr.Dropdown(
                 value='', allow_custom_value=True, label='Stress placement',
                 choices=accent_models_list, interactive=True,
+                elem_id='acc_model_sel',
                 info="Places Russian stress marks so 'замо́к' and 'за́мок' are read correctly. "
                      "RuAccent = best quality, Silero stress = lighter (CPU friendly)",
             )
@@ -1173,6 +1182,7 @@ with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew")
         inputs=[file_queue_state, upload_text_file, remove_ru_cb, bg_mode_cb, auto_open_upload_cb, sound_done_upload_cb], 
         outputs=[ab_path, load_project_dropdown, upload_progress_html, upload_status_text, file_queue_state, queue_table, queue_counter, upload_text_file]
     ).then(select_uploaded_next, inputs=[ab_path, upload_status_text], outputs=[inner_tabs, ab_state], queue=False
+    ).then(open_analyze_tab, outputs=[inner_tabs], queue=False
     ).then(get_xml_files, inputs=ab_path, outputs=parse_df_output)
     sound_done_upload_cb.change(lambda v: AppConfig.save_user_settings({"sound_done": bool(v)}), inputs=sound_done_upload_cb, outputs=[])
     
@@ -1180,7 +1190,8 @@ with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew")
         fn=process_url_wrapper, 
         inputs=[url_input, remove_ru_cb], 
         outputs=[ab_path, load_project_dropdown]
-    ).then(toggle_tab, inputs=ab_path, outputs=[inner_tabs, ab_state])
+    ).then(toggle_tab_parse, inputs=ab_path, outputs=[inner_tabs, ab_state]
+    ).then(open_analyze_tab, outputs=[inner_tabs], queue=False)
     
     rm_dataset.click(remove_dataset, inputs=ab_path, outputs=[ab_path, inner_tabs])
     rm_all_dataset.click(remove_all_datasets, outputs=[ab_path, inner_tabs])

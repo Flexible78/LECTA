@@ -909,6 +909,17 @@ body.lecta-help-open .lecta-help-backdrop { display: block; }
    declaration wins. Putting this block first made it look like nothing changed.
    ======================================================================= */
 
+/* The two model pickers get their own card frame: without it the sidebar
+   looked like a flat list of text. */
+body .gradio-container .sidebar #tts_model_sel,
+body .gradio-container .sidebar #acc_model_sel {
+  border: 2px solid var(--lecta-border-strong) !important;
+  border-radius: 12px !important;
+  background: var(--lecta-surface) !important;
+  padding: 9px 10px 10px !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 2px 8px rgba(0, 0, 0, 0.28) !important;
+}
+
 /* The select itself: Gradio renders a bare <input> inside .wrap-inner, which
    has no border and no fill, so it read as plain text. */
 body .gradio-container .block .wrap-inner {

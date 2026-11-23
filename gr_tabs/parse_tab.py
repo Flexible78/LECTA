@@ -58,6 +58,24 @@ def get_all_projects_xml(ab_path=None):
             rows.append([f"{project_dir.name} / {f}.xml"])
     return rows if rows else [["⚠️ No XML files in any project"]]
 
+def open_analysis_data(ab_path):
+    """Open the analysis section together with its data.
+
+    Selecting the ANALYZE tab is not enough: the user expects to see the split
+    files and the first fragment immediately, not an empty table.
+    """
+    rows = get_xml_files(ab_path)
+    if not rows or not rows[0] or str(rows[0][0]).startswith("⚠️"):
+        return rows, "", gr.update(interactive=False), ""
+    xml_dir = data_path / str(ab_path) / "xml"
+    file_path = xml_dir / f"{rows[0][0]}.xml"
+    try:
+        content = file_path.read_text(encoding="utf-8")
+    except Exception as e:
+        content = f"Error: {e}"
+    return rows, content, gr.update(interactive=True), str(file_path)
+
+
 def show_file_content(data: gr.SelectData, ab_path: str):
     if not ab_path or str(ab_path).startswith('<gradio'): 
         return "", gr.update(interactive=False), ""
@@ -188,10 +206,11 @@ def parse_fb2_wrapper(
                 xml_file.write_text(content, encoding='utf-8')
 
         msg = "🛑 Stopped by user" if processor.stop_parsing else "✅ Completed"
-        # Analysis finished successfully — hand the user straight to voiceover.
-        # Gradio 6 removed component-instance updates, so this must be a dict
-        # update; returning gr.Tabs(...) silently did nothing.
-        next_tab = gr.update() if processor.stop_parsing else gr.update(visible=True, selected="tts")
+        # Analysis finished — hand the user to voiceover. Only the container is
+        # shown here; the tab is selected in a second, separate response, because
+        # Gradio 6 marks a tab selected but does not mount its panel when both
+        # the visibility flip and the selection arrive in the same update.
+        next_tab = gr.update(visible=True)
         yield get_xml_files(ab_path), get_parse_metrics_html(100, msg), msg, next_tab
         if not processor.stop_parsing:
             _play_done_sound()
@@ -521,6 +540,10 @@ def parse_tab(ab_path, acc_state, tts_state, inner_tabs):
                 
                 cur_file = gr.State()
 
+    def _select_after_parse():
+        # Second response: actually select the tab so its panel is mounted.
+        return gr.update() if processor and processor.stop_parsing else gr.update(visible=True, selected="tts")
+
     parse_btn.click(
         fn=lambda: (gr.update(value="⏳ Initializing..."), get_parse_metrics_html(0, "Starting...")), 
         outputs=[status, metrics_panel], queue=False
@@ -528,6 +551,8 @@ def parse_tab(ab_path, acc_state, tts_state, inner_tabs):
         fn=parse_fb2_wrapper,
         inputs=[ab_path, repl, ch_size, gender, sound_effect, accent, single_vowel, punctuation, translit, profanity, remove_ru, is_english, translate, auto_clean],
         outputs=[df_output, metrics_panel, status, inner_tabs]
+    ).then(
+        fn=_select_after_parse, outputs=[inner_tabs], queue=False
     ).then(
         fn=get_xml_files, inputs=ab_path, outputs=df_output
     )
@@ -609,6 +634,6 @@ def parse_tab(ab_path, acc_state, tts_state, inner_tabs):
     
     archive_df.select(fn=archive_select_row, outputs=selected_archive_row)
     restore_btn.click(fn=restore_from_archive, inputs=[selected_archive_row, archive_df, ab_path], outputs=[df_output, archive_status, archive_df])
-    pr_tab.select(fn=get_xml_files, inputs=ab_path, outputs=df_output)
+    pr_tab.select(fn=open_analysis_data, inputs=ab_path, outputs=[df_output, file_content, del_btn, cur_file])
     acc_state.change(fn=lambda: gr.update(interactive=True, value=False), outputs=accent)
     return file_content, df_output
