@@ -501,83 +501,6 @@ footer { display: none !important; }
 /* Sidebar helper text moves into the tooltip (see the enhancer script). */
 .gradio-container .sidebar .lecta-info-hidden { display: none !important; }
 
-/* --- Dropdowns: make the click target obvious --------------------------
-   Gradio renders the select as a bare <input> inside .wrap-inner with no
-   border, so in the sidebar it read as plain text: nothing said "click me". */
-body .gradio-container .block .wrap-inner {
-  background: #08242a !important;
-  border: 2px solid var(--lecta-border-strong) !important;
-  border-radius: var(--lecta-radius-sm) !important;
-  min-height: 38px !important;
-  cursor: pointer !important;
-  transition: border-color 0.13s ease, background 0.13s ease, box-shadow 0.13s ease;
-}
-body .gradio-container .block .wrap-inner:hover {
-  border-color: var(--lecta-accent) !important;
-  background: #0b2c33 !important;
-}
-body .gradio-container .block .wrap-inner:focus-within {
-  border-color: var(--lecta-accent) !important;
-  box-shadow: var(--lecta-focus) !important;
-}
-body .gradio-container .block .wrap-inner input,
-body .gradio-container .block .secondary-wrap input {
-  color: var(--lecta-text) !important;
-  font-weight: 600 !important;
-  cursor: pointer !important;
-  padding-left: 4px !important;
-}
-/* the chevron: bright, unmistakably a menu */
-body .gradio-container .block .icon-wrap,
-body .gradio-container .block .icon-wrap svg {
-  color: var(--lecta-info) !important;
-  opacity: 1 !important;
-}
-/* open list of choices */
-body .gradio-container .options {
-  background: #08242a !important;
-  border: 2px solid var(--lecta-border-strong) !important;
-  border-radius: var(--lecta-radius-sm) !important;
-  box-shadow: var(--lecta-shadow) !important;
-}
-body .gradio-container .options .item {
-  color: var(--lecta-text) !important;
-  font-size: 13px !important;
-  padding: 7px 10px !important;
-  cursor: pointer !important;
-}
-body .gradio-container .options .item:hover,
-body .gradio-container .options .item.selected {
-  background: rgba(217, 153, 47, 0.16) !important;
-  color: var(--lecta-text) !important;
-  font-weight: 600 !important;
-}
-
-/* --- Read-only status boxes ("Model loaded successfully!") ---------------
-   They used to render as a tiny box with its own scrollbar and clipped text. */
-body .gradio-container .sidebar textarea,
-body .gradio-container .block textarea {
-  background: var(--lecta-surface-3) !important;
-  border: 1px solid var(--lecta-border) !important;
-  border-radius: var(--lecta-radius-sm) !important;
-  color: var(--lecta-text) !important;
-  font-size: 12px !important;
-  font-weight: 600 !important;
-  line-height: 1.45 !important;
-  min-height: 32px !important;
-  max-height: 76px !important;
-  padding: 7px 9px !important;
-  resize: none !important;
-  overflow-y: auto !important;
-}
-body .gradio-container .sidebar textarea[disabled] {
-  color: var(--lecta-ok) !important;
-  border-color: rgba(63, 185, 141, 0.35) !important;
-  background: rgba(63, 185, 141, 0.08) !important;
-  -webkit-text-fill-color: var(--lecta-ok) !important;
-  opacity: 1 !important;
-}
-
 /* --- Sidebar helper text ------------------------------------------------
    Gradio renders `info=` as a paragraph inside the control label. In the
    narrow sidebar that text pushes the controls apart, so it becomes a
@@ -977,6 +900,97 @@ body.lecta-help-open .lecta-help-backdrop { display: block; }
   .lecta-help-head h2 { font-size: 16px; }
   .lecta-help-body { padding: 4px 14px 18px; }
   .lecta-help-panel th, .lecta-help-panel td { padding: 6px 8px; }
+}
+
+/* =======================================================================
+   Field affordance. Kept at the very END of the stylesheet on purpose:
+   an earlier generic rule sets `background: var(--lecta-surface)` on
+   .options/.wrap-inner with !important, and with equal specificity the later
+   declaration wins. Putting this block first made it look like nothing changed.
+   ======================================================================= */
+
+/* The select itself: Gradio renders a bare <input> inside .wrap-inner, which
+   has no border and no fill, so it read as plain text. */
+body .gradio-container .block .wrap-inner {
+  background: #08242a !important;
+  border: 2px solid var(--lecta-border-strong) !important;
+  border-radius: var(--lecta-radius-sm) !important;
+  min-height: 40px !important;
+  cursor: pointer !important;
+  transition: border-color 0.13s ease, background 0.13s ease, box-shadow 0.13s ease;
+}
+body .gradio-container .block .wrap-inner:hover {
+  border-color: var(--lecta-accent) !important;
+  background: #0b2c33 !important;
+}
+body .gradio-container .block .wrap-inner:focus-within {
+  border-color: var(--lecta-accent) !important;
+  box-shadow: var(--lecta-focus) !important;
+}
+body .gradio-container .block .wrap-inner input,
+body .gradio-container .block .secondary-wrap input {
+  color: var(--lecta-text) !important;
+  font-weight: 600 !important;
+  cursor: pointer !important;
+  padding-left: 4px !important;
+}
+/* the chevron: bright, unmistakably a menu */
+body .gradio-container .block .icon-wrap,
+body .gradio-container .block .icon-wrap svg {
+  color: var(--lecta-info) !important;
+  opacity: 1 !important;
+}
+
+/* The open list of choices: Gradio paints it with --background-fill-primary,
+   which reads as a flat light panel over the petrol UI. */
+body .gradio-container ul.options,
+body .gradio-container .options {
+  background: #08242a !important;
+  border: 2px solid var(--lecta-border-strong) !important;
+  border-radius: var(--lecta-radius-sm) !important;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.55) !important;
+  padding: 4px !important;
+}
+body .gradio-container ul.options li.item,
+body .gradio-container .options .item {
+  color: var(--lecta-text) !important;
+  font-size: 13px !important;
+  padding: 7px 10px !important;
+  border-radius: 6px !important;
+  cursor: pointer !important;
+}
+body .gradio-container ul.options li.item:hover,
+body .gradio-container ul.options li.item.selected,
+body .gradio-container .options .item:hover,
+body .gradio-container .options .item.selected {
+  background: rgba(217, 153, 47, 0.18) !important;
+  color: var(--lecta-text) !important;
+  font-weight: 600 !important;
+}
+
+/* Read-only status boxes ("Model loaded successfully!") used to render as a
+   45 px box with its own scrollbar and clipped text. */
+body .gradio-container .sidebar textarea,
+body .gradio-container .block textarea {
+  background: var(--lecta-surface-3) !important;
+  border: 1px solid var(--lecta-border) !important;
+  border-radius: var(--lecta-radius-sm) !important;
+  color: var(--lecta-text) !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  line-height: 1.45 !important;
+  min-height: 32px !important;
+  max-height: 76px !important;
+  padding: 7px 9px !important;
+  resize: none !important;
+  overflow-y: auto !important;
+}
+body .gradio-container .sidebar textarea[disabled] {
+  color: var(--lecta-ok) !important;
+  border-color: rgba(63, 185, 141, 0.35) !important;
+  background: rgba(63, 185, 141, 0.08) !important;
+  -webkit-text-fill-color: var(--lecta-ok) !important;
+  opacity: 1 !important;
 }
 """
 

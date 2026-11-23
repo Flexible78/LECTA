@@ -592,9 +592,17 @@ def tts_model_load(ver, progress=gr.Progress()): return synth.load(ver)
 def acc_model_load(ver, progress=gr.Progress()): return accentizer.load(ver)
 
 def change_tts_model(mver):
-    sp_list = synth.speakers_list()
-    speaker = sp_list[0][1] if isinstance(sp_list[0], tuple) and sp_list else (sp_list[0] if sp_list else "")
+    # `sp_list[0]` was indexed before checking that the list was non-empty, so a
+    # model that was not loaded (or failed to load) raised IndexError here and
+    # left both the sidebar model list and the voice dropdown blank.
+    try:
+        sp_list = list(synth.speakers_list() or [])
+    except Exception:
+        sp_list = []
     ref_group = gr.update(visible=True) if mver in [5, 6] else gr.update(visible=False)
+    if not sp_list:
+        return gr.update(choices=[], value=""), gr.update(visible=True), gr.update(interactive=True), ref_group
+    speaker = sp_list[0][1] if isinstance(sp_list[0], tuple) else sp_list[0]
     return gr.update(value=speaker, choices=sp_list), gr.update(visible=True), gr.update(interactive=True), ref_group
 
 def change_acc_model(mver): return gr.update(interactive=True)
@@ -648,20 +656,46 @@ document.addEventListener('keydown', function(e) {
 </script>
 """
 
+def _build_stamp():
+    """Short commit id + date, so the running build is visible at a glance.
+
+    Without it "nothing changed" is impossible to argue with: the browser shows
+    whatever a long-running process loaded at start-up.
+    """
+    try:
+        root = os.path.dirname(os.path.abspath(__file__))
+        head = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"], cwd=root,
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+        when = subprocess.run(
+            ["git", "log", "-1", "--format=%cd", "--date=format:%Y-%m-%d %H:%M"], cwd=root,
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+        if head:
+            return f"{head} · {when}"
+    except Exception:
+        pass
+    return ""
+
+
+BUILD_STAMP = _build_stamp()
+
 with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew") as App:
     gr.HTML(global_shortcuts, visible=False)
     gr.Markdown(
         "<div id='lecta-header' style='text-align:center; margin:0; padding:0; line-height:1.25;'>"
-        "<h1 style='margin:0; color:#52acde; font-size:20px; line-height:1.2;'>LECTA"
-        "<span style='color:#8fa3bd; font-size:12px; font-weight:400; margin-left:8px;'>Text-to-Speech for Russian, English and Hebrew</span>"
+        "<h1 style='margin:0; color:#e8f4f4; font-size:20px; line-height:1.2;'>LECTA"
+        "<span style='color:#8fb0b3; font-size:12px; font-weight:400; margin-left:8px;'>Text-to-Speech for Russian, English and Hebrew</span>"
         "</h1>"
-        "<p style='margin:1px 0 0 0; color:#64748b; font-size:11px; line-height:1.3;'>"
+        "<p style='margin:1px 0 0 0; color:#6f9295; font-size:11px; line-height:1.3;'>"
         "KATAV writes, LECTA reads. &nbsp;|&nbsp; "
         "<a href='https://github.com/Flexible78/KATAV' target='_blank' rel='noopener' style='color:#4cc9c1;'>KATAV on GitHub</a>"
         "&nbsp;|&nbsp;"
         "<a href='" + config_module.LECTA_REPO_URL + "' target='_blank' rel='noopener' style='color:#4cc9c1;'>LECTA on GitHub</a>"
         "&nbsp;|&nbsp;"
         "Built on <a href='https://gitverse.ru/diger/fb2tts' target='_blank' rel='noopener' style='color:#6f9295;'>fb2tts</a> by diger"
+        + ("&nbsp;|&nbsp;<span id='lecta-build' title='Running build — restart the app to pick up a newer one'>build " + BUILD_STAMP + "</span>" if BUILD_STAMP else "") +
         "</p>"
         "</div>",
         elem_id="lecta-header"
@@ -783,7 +817,20 @@ with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew")
             restart_btn = gr.Button("🔄 Restart", variant="primary")
             quit_btn = gr.Button("🚪 Quit", variant="stop")
         
-        def restart_app(): os._exit(42)
+        def restart_app():
+            # Re-exec the interpreter with the same command line. os._exit(42)
+            # only restarts when a watchdog launcher is watching, so from a normal
+            # console the Restart button killed the app instead of reloading it.
+            try:
+                sys.stdout.flush()
+                sys.stderr.flush()
+            except Exception:
+                pass
+            try:
+                os.execv(sys.executable, [sys.executable] + sys.argv)
+            except Exception:
+                os._exit(42)
+
         def stop_app(): os._exit(0)
         
         js_restart = "function(){ document.body.innerHTML = '<h1 style=\"color:#38bdf8; text-align:center; margin-top:20%; font-family:sans-serif;\">🔄 Restarting server...<br>Please wait.</h1>'; setTimeout(() => location.reload(), 2000); }"

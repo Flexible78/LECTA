@@ -2646,22 +2646,32 @@ def _play_completion_sound():
 
 
 def change_tts_model(mver):
-    sp_list = synth.speakers_list()
-    speaker = sp_list[0]
-    if isinstance(speaker, tuple):
-        speaker = sp_list[0][1]
+    try:
+        sp_list = list(synth.speakers_list() or [])
+    except Exception:
+        sp_list = []
 
     try:
         fresh_config = AppConfig.load_user_settings()
-        saved_spk = getattr(fresh_config, "spk_sel", "")
-
-        if saved_spk and any(
-            saved_spk == s or (isinstance(s, tuple) and saved_spk == s[1])
-            for s in sp_list
-        ):
-            speaker = saved_spk
+        saved_spk = getattr(fresh_config, "spk_sel", "") or ""
     except Exception:
-        pass
+        saved_spk = ""
+
+    # No speakers means no model is loaded (or it failed to load). Returning an
+    # index error here left the voice dropdown permanently blank, which looked
+    # like "voice selection disappeared".
+    if not sp_list:
+        return gr.update(choices=[saved_spk] if saved_spk else [], value=saved_spk)
+
+    speaker = sp_list[0]
+    if isinstance(speaker, tuple):
+        speaker = speaker[1]
+
+    if saved_spk and any(
+        saved_spk == s or (isinstance(s, tuple) and saved_spk == s[1])
+        for s in sp_list
+    ):
+        speaker = saved_spk
 
     return gr.update(value=speaker, choices=sp_list)
 
@@ -2672,6 +2682,27 @@ def tts_tab(ab_path, tts_state):
         with gr.Row():
             # ── LEFT COLUMN: batch TTS block on top, then TTS controls ──
             with gr.Column(scale=5, min_width=320):
+                # ── Main voice: the first control in this tab, full width ──
+                with gr.Row():
+                    try:
+                        fresh_config = AppConfig.load_user_settings()
+                        saved_spk = getattr(fresh_config, "spk_sel", "")
+                    except:
+                        saved_spk = ""
+                    spk_sel = gr.Dropdown(
+                        value=saved_spk,
+                        label="Select main voice",
+                        choices=[saved_spk] if saved_spk else [],
+                        allow_custom_value=True,
+                        interactive=True,
+                        scale=6,
+                        info="Every voice of the loaded TTS model. An empty list means no "
+                             "model is loaded yet — press 🔄 Refresh voices",
+                    )
+                    refresh_voices_btn = gr.Button(
+                        "🔄 Refresh voices", size="sm", scale=1, min_width=130,
+                        elem_id="refresh_voices_btn",
+                    )
                 # ── Batch TTS block (pinned to top) ──
                 with gr.Row():
                     batch_project_sel = gr.CheckboxGroup(
@@ -2725,17 +2756,6 @@ def tts_tab(ab_path, tts_state):
                     )
 
                 with gr.Row():
-                    try:
-                        fresh_config = AppConfig.load_user_settings()
-                        saved_spk = getattr(fresh_config, "spk_sel", "")
-                    except:
-                        saved_spk = ""
-                    spk_sel = gr.Dropdown(
-                        value=saved_spk,
-                        label="Select main voice",
-                        choices=[saved_spk] if saved_spk else [""],
-                        interactive=True,
-                    )
                     sp_rate = gr.Slider(
                         0, 3, config.sp_rate, step=0.1,
                         label="Set speed", interactive=True,
@@ -2748,6 +2768,8 @@ def tts_tab(ab_path, tts_state):
                         allow_custom_value=True,
                         label="Select music for table of contents",
                         choices=[""], interactive=True,
+                        info="Background music for the table of contents (the .wav files in "
+                             "<code>data/music</code>). This is not the voice list",
                     )
                     bitrate = gr.Slider(
                         24, 256, config.bitrate, step=2,
@@ -3055,3 +3077,7 @@ def tts_tab(ab_path, tts_state):
         fn=get_file_checkbox_choices, inputs=[ab_path, df_output], outputs=[file_checkboxes]
     )
     tts_state.change(change_tts_model, inputs=tts_state, outputs=spk_sel)
+    # The list must also appear without waiting for a model reload: it is
+    # refreshed whenever the tab is opened and on demand with the button.
+    tts_tab_ui.select(change_tts_model, inputs=[tts_state], outputs=[spk_sel])
+    refresh_voices_btn.click(change_tts_model, inputs=[tts_state], outputs=[spk_sel])
