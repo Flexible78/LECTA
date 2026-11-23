@@ -501,6 +501,83 @@ footer { display: none !important; }
 /* Sidebar helper text moves into the tooltip (see the enhancer script). */
 .gradio-container .sidebar .lecta-info-hidden { display: none !important; }
 
+/* --- Dropdowns: make the click target obvious --------------------------
+   Gradio renders the select as a bare <input> inside .wrap-inner with no
+   border, so in the sidebar it read as plain text: nothing said "click me". */
+body .gradio-container .block .wrap-inner {
+  background: #08242a !important;
+  border: 2px solid var(--lecta-border-strong) !important;
+  border-radius: var(--lecta-radius-sm) !important;
+  min-height: 38px !important;
+  cursor: pointer !important;
+  transition: border-color 0.13s ease, background 0.13s ease, box-shadow 0.13s ease;
+}
+body .gradio-container .block .wrap-inner:hover {
+  border-color: var(--lecta-accent) !important;
+  background: #0b2c33 !important;
+}
+body .gradio-container .block .wrap-inner:focus-within {
+  border-color: var(--lecta-accent) !important;
+  box-shadow: var(--lecta-focus) !important;
+}
+body .gradio-container .block .wrap-inner input,
+body .gradio-container .block .secondary-wrap input {
+  color: var(--lecta-text) !important;
+  font-weight: 600 !important;
+  cursor: pointer !important;
+  padding-left: 4px !important;
+}
+/* the chevron: bright, unmistakably a menu */
+body .gradio-container .block .icon-wrap,
+body .gradio-container .block .icon-wrap svg {
+  color: var(--lecta-info) !important;
+  opacity: 1 !important;
+}
+/* open list of choices */
+body .gradio-container .options {
+  background: #08242a !important;
+  border: 2px solid var(--lecta-border-strong) !important;
+  border-radius: var(--lecta-radius-sm) !important;
+  box-shadow: var(--lecta-shadow) !important;
+}
+body .gradio-container .options .item {
+  color: var(--lecta-text) !important;
+  font-size: 13px !important;
+  padding: 7px 10px !important;
+  cursor: pointer !important;
+}
+body .gradio-container .options .item:hover,
+body .gradio-container .options .item.selected {
+  background: rgba(217, 153, 47, 0.16) !important;
+  color: var(--lecta-text) !important;
+  font-weight: 600 !important;
+}
+
+/* --- Read-only status boxes ("Model loaded successfully!") ---------------
+   They used to render as a tiny box with its own scrollbar and clipped text. */
+body .gradio-container .sidebar textarea,
+body .gradio-container .block textarea {
+  background: var(--lecta-surface-3) !important;
+  border: 1px solid var(--lecta-border) !important;
+  border-radius: var(--lecta-radius-sm) !important;
+  color: var(--lecta-text) !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  line-height: 1.45 !important;
+  min-height: 32px !important;
+  max-height: 76px !important;
+  padding: 7px 9px !important;
+  resize: none !important;
+  overflow-y: auto !important;
+}
+body .gradio-container .sidebar textarea[disabled] {
+  color: var(--lecta-ok) !important;
+  border-color: rgba(63, 185, 141, 0.35) !important;
+  background: rgba(63, 185, 141, 0.08) !important;
+  -webkit-text-fill-color: var(--lecta-ok) !important;
+  opacity: 1 !important;
+}
+
 /* --- Sidebar helper text ------------------------------------------------
    Gradio renders `info=` as a paragraph inside the control label. In the
    narrow sidebar that text pushes the controls apart, so it becomes a
@@ -1083,11 +1160,15 @@ _head_steps = """
       tab = best;
     }
     if (!tab) { return false; }
-    if (!tab.classList.contains('selected')) {
+    if (!isSelected(tab)) {
       var btn = tab.querySelector('button') || tab;
       btn.click();
     }
     return true;
+  }
+
+  function isSelected(tab) {
+    return tab.classList.contains('selected') || tab.getAttribute('aria-selected') === 'true';
   }
 
   function tabKind(tab) {
@@ -1195,7 +1276,7 @@ _head_steps = """
   function syncFromTabs() {
     var tabs = document.querySelectorAll('[role="tab"]');
     for (var i = 0; i < tabs.length; i++) {
-      if (!tabs[i].classList.contains('selected')) { continue; }
+      if (!isSelected(tabs[i])) { continue; }
       var kind = tabKind(tabs[i]);
       if (kind === 'analyze') { setStep(2); return; }
       if (kind === 'tts') { setStep(4); return; }
@@ -1210,9 +1291,13 @@ _head_steps = """
       lists[i].setAttribute('data-lecta-observed', '1');
       observer.observe(lists[i], { subtree: true, attributes: true, attributeFilter: ['class'] });
     }
+    // Gradio may replace the whole tab container instead of flipping a class,
+    // in which case no mutation ever fires on the new nodes: sync on every
+    // pass as well, so the strip is at most one tick behind.
+    syncFromTabs();
   }
   observeTabs();
-  setInterval(observeTabs, 1500);  // inner tabs are rendered later, on demand
+  setInterval(observeTabs, 600);  // inner tabs are rendered later, on demand
 })();
 </script>
 """

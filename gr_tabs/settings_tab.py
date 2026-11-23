@@ -27,7 +27,7 @@ def save_paths(data_path_input: str, models_path_input: str):
     return gr.update(), gr.update()
 
 def toggle_tab():
-    return gr.Tabs(visible=True, selected=0)
+    return gr.update(visible=True, selected=0)
 
 def select_file(data, evt: gr.SelectData):
     full_path = Path(back_path) / f'{data[evt.index[0]][0]}.wav'

@@ -87,6 +87,33 @@ class WorkflowGuideTests(unittest.TestCase):
         self.assertIn("clickTab('tts')", js)
 
 
+class ControlAffordanceTests(unittest.TestCase):
+    """A control must look like a control: the sidebar selects used to render as
+    bare text (Gradio's .wrap-inner carries no border of its own)."""
+
+    def test_selects_get_visible_field_and_chevron(self):
+        css = ui.custom_css
+        self.assertIn("body .gradio-container .block .wrap-inner {", css)
+        self.assertIn("border: 2px solid var(--lecta-border-strong) !important", css)
+        self.assertIn("cursor: pointer !important", css)
+        self.assertIn(".icon-wrap svg", css)          # the dropdown arrow
+        self.assertIn(".options .item:hover", css)      # the open list
+
+    def test_status_boxes_are_not_clipped(self):
+        css = ui.custom_css
+        self.assertIn("body .gradio-container .sidebar textarea", css)
+        self.assertIn("max-height: 76px !important", css)
+        self.assertIn("resize: none !important", css)
+
+    def test_strip_resyncs_without_waiting_for_a_mutation(self):
+        # Gradio may replace the tab container wholesale, so the class observer
+        # alone never fires and the strip stayed on step 1 after an upload.
+        js = ui.custom_head
+        self.assertIn("syncFromTabs();", js)
+        self.assertIn("setInterval(observeTabs, 600)", js)
+        self.assertIn("function isSelected(tab)", js)
+
+
 class ThemeTests(unittest.TestCase):
     def test_petrol_palette_tokens(self):
         self.assertIn("--lecta-bg: #05171a", ui.custom_css)
