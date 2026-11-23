@@ -21,6 +21,7 @@ import libs.multilingual_router as router  # для доступа к флага
 import numpy as np
 from config import AppConfig, config, TTS_WORKERS, TTS_COOLDOWN_SEC, TTS_GPU_TEMP_LIMIT_C, TTS_GPU_TEMP_RESUME_C
 from libs.accent import accentizer
+from libs.estimates import steps_hint_html
 from libs.fb2_processor import FB2Processor
 from libs.thermal import get_gpu_temp
 from libs.multilingual_router import process_multilingual_text
@@ -2738,6 +2739,8 @@ def tts_tab(ab_path, tts_state):
                     sp_rate = gr.Slider(
                         0, 3, config.sp_rate, step=0.1,
                         label="Set speed", interactive=True,
+                        info="1.0 = normal · 0.9 = calmer and slower · 1.1 = quicker. "
+                             "Changes the speaking rate, not the generation time",
                     )
                 with gr.Row():
                     back_sound_sel = gr.Dropdown(
@@ -2749,11 +2752,14 @@ def tts_tab(ab_path, tts_state):
                     bitrate = gr.Slider(
                         24, 256, config.bitrate, step=2,
                         label="Set audio bitrate", interactive=True,
+                        info="kbps. 96–128 is transparent for speech, 192 is archival — "
+                             "higher only makes files bigger",
                     )
                     noise_lvl = gr.Slider(
                         4, 32, config.noise_lvl, step=2,
                         label="F5-TTS inference steps",
-                        info="Lower = faster, higher = better quality (4-32)",
+                        info="Main quality/speed knob: 8 = draft, 10–14 = normal, "
+                             "20+ = maximum detail. Time grows linearly — see the hint below",
                         interactive=True,
                     )
 
@@ -2774,6 +2780,21 @@ def tts_tab(ab_path, tts_state):
                         tts_button = gr.Button("TTS (Ctrl+Enter)", elem_id="tts_btn", variant="primary", size="sm")
                         batch_tts_btn = gr.Button("Batch TTS (selected)", variant="primary", size="sm", elem_id="batch_tts_btn")
                         stop_btn = gr.Button("Stop", variant="stop", size="sm")
+
+                # Live cost estimate: steps + stress marks -> time (measured on this GPU).
+                steps_hint = gr.HTML(
+                    steps_hint_html(int(config.noise_lvl or 12), accents=bool(config.use_accents))
+                )
+
+                def _update_steps_hint(steps, accents):
+                    return steps_hint_html(int(steps or 12), accents=bool(accents))
+
+                noise_lvl.change(
+                    _update_steps_hint, inputs=[noise_lvl, use_accents], outputs=steps_hint
+                )
+                use_accents.change(
+                    _update_steps_hint, inputs=[noise_lvl, use_accents], outputs=steps_hint
+                )
 
             # ── RIGHT COLUMN: file table, player, buttons ──
             with gr.Column(scale=4, min_width=360):

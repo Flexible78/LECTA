@@ -27,7 +27,7 @@ def _model_not_found_hint():
 # Используется tts_tab.py при сохранении и показе MP3.
 MODEL_SHORT_NAMES = {
     2: "Vosk0.10",
-    3: "Silero5_5",
+    3: "Silero5_6",
     4: "SileroCIS",
     5: "F5-Misha",
     6: "F5-ESp",
@@ -105,7 +105,7 @@ class TTSModel:
             # Обновляем устройство при каждой загрузке (пользователь мог переключить GPU/CPU)
             self.device = torch.device(get_device())
             if ver == 3:
-                model_name = 'v5_5_ru.pt'
+                model_name = 'v5_6_ru.pt'
                 lang = 'ru'
             elif ver == 4:
                 model_name = 'v5_cis_base_nostress.pt'

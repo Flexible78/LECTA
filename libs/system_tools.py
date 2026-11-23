@@ -27,11 +27,11 @@ CURRENT_DIR = Path(__file__).resolve().parent.parent
 # Файл: (url, локальный_путь_относительно_models/)
 VOICE_MODELS_REGISTRY = [
     ("vosk_010", "Vosk 0.10 (56 voices)", [
-        ("https://myfreenet.ru/models/vosk-model-tts-ru-0.10-multi.zip",
+        ("https://alphacephei.com/vosk/models/vosk-model-tts-ru-0.10-multi.zip",
          "vosk-model-tts-ru-0.10-multi.zip"),
     ]),
-    ("silero_ru", "Silero v5_5 (Russian, 5 voices)", [
-        ("https://models.silero.ai/models/tts/ru/v5_5_ru.pt", "silero/v5_5_ru.pt"),
+    ("silero_ru", "Silero v5_6 (Russian, 5 voices)", [
+        ("https://models.silero.ai/models/tts/ru/v5_6_ru.pt", "silero/v5_6_ru.pt"),
     ]),
     ("silero_cis", "Silero v5_cis (60 voices)", [
         ("https://models.silero.ai/models/tts/ru/v5_cis_base_nostress.pt",
@@ -66,7 +66,8 @@ VOICE_MODELS_REGISTRY = [
 # Ключ — model_id, значение — список старых путей (относительно models/) которые
 # нужно удалить после успешного обновления модели на новую версию.
 OLD_FILES_CLEANUP = {
-    "silero_ru": ["silero/v5_ru.pt"],          # заменён на v5_5_ru.pt
+    # Superseded Russian Silero checkpoints, removed after a successful update.
+    "silero_ru": ["silero/v5_ru.pt", "silero/v5_5_ru.pt"],  # v5 -> v5_5 -> v5_6
     # При будущих обновлениях добавляйте старые версии сюда:
     # "silero_cis": ["silero/v5_cis_base_v1.pt"],
     # "f5_misha": ["F5TTS_v1_Base_v4_winter/model_old.pt"],
@@ -161,8 +162,9 @@ def delete_selected_model(model_name, confirmed, tts_model_ver=None, acc_model_v
     # Map model folder names to the internal model IDs used by tts_sel / acc_sel
     folder_to_tts_id = {
         "vosk-model-tts-ru-0.10-multi": 2,
-        "silero": (3, 4, 7),      # Silero folder contains multiple models (v5_5, cis, en)
+        "silero": (3, 4, 7),      # Silero folder contains multiple models (v5_6, cis, en)
         "v5_5_ru.pt": 3,
+        "v5_6_ru.pt": 3,
         "v5_cis_base_nostress.pt": 4,
         "F5TTS_v1_Base_v4_winter": 5,
         "ESpeech-TTS-1_RL-V2": 6,

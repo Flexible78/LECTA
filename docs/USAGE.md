@@ -7,11 +7,14 @@ synthesising speech, and using the vocabulary and batch features.
 
 ## Sidebar
 
-The sidebar is always visible on the left.
+The sidebar is always visible on the left and is grouped into four collapsible
+sections: **🎙 Voice & language**, **🌍 Language routing**, **✂️ Pauses** and
+**🖥 Performance & GPU**. Hover the small `i` badges for a one-line explanation
+of any control.
 
 | Control | Description |
 |---------|-------------|
-| **Select TTS model** | Choose the speech engine: Vosk 0.10, Silero v5_5, Silero v5_cis, Misha24-10 (F5-TTS), ESpeech-TTS (F5-TTS), Silero English v3 |
+| **Select TTS model** | Choose the speech engine: Vosk 0.10, Silero v5_6, Silero v5_cis, Misha24-10 (F5-TTS), ESpeech-TTS (F5-TTS), Silero English v3 |
 | **Stress placement** | Choose the stress model: RuAccent or Silero Stress (Russian only) |
 | **Compute device** | `auto` = GPU if available (fast, ≥ 6 GB VRAM), `cpu` = RAM only (slower) |
 | **♻ ECO (quiet / cool)** | Reduce workers to 2, add cooldown, lower temp limit to 78 °C |
@@ -20,11 +23,51 @@ The sidebar is always visible on the left.
 | **⚡ English via cloud** | Use Microsoft Edge TTS for English |
 | **⚡ Hebrew via cloud** | Use Microsoft Edge TTS for Hebrew (recommended — no local Hebrew backend exists) |
 | **📚 Dictionary mode** | Insert a 1-second pause between language switches |
+| **✂️ Pause profile** | `compact` / `natural` / `learning` presets for gaps between phrases, sentences and paragraphs |
+| **Max pause inside a phrase** | Cap on the silence the engine itself inserts inside a fragment — `0.15–0.25 s` gives tight narration, `0.4 s` a calm read |
+| **Language-switch gap** | Gap inserted where the narration switches language |
+| **Edge trim pad / Anti-click fade** | Small head/tail padding and fade for cloud fragments (guards against clipped words and clicks) |
 | **🔄 Restart** | Restart the server |
 | **🚪 Quit** | Stop the server |
 
+> A small **`?`** button sits in the top-right corner of the window (or press
+> **F1**). It opens the full reference: every voice, every slider, the measured
+> time costs and troubleshooting. Close it with `Esc`.
+
 > Cloud voices are generated in parallel and cached to disk (`data/tts_cache/`).
 > The first request for a phrase is slower; subsequent requests are instant.
+
+---
+
+## Workflow at a glance
+
+Above the tab content a five-step strip reminds you where you are:
+
+| Step | What happens |
+|------|--------------|
+| **1. Add a book** | Upload a file or paste a URL — it is converted to FB2 and parsed |
+| **2. Analyze** | The FB2 is split into chapters and written as XML |
+| **3. Pick a voice** | Sidebar: model, cloud flags, pauses |
+| **4. Generate** | **TTS** for one chapter, **Batch TTS** for the whole project |
+| **5. Done** | The MP3 appears in the file table with a player and a download button |
+
+### How long will synthesis take?
+
+Local F5-TTS runs (ESpeech-TTS / Misha24-10) are GPU-bound. Measured on an
+RTX 3060 Laptop (6 GB), speed 1.0, RuAccent on:
+
+| Inference steps | Seconds per 1000 characters | A 300 000-character book |
+|-----------------|------------------------------|--------------------------|
+| 8 (draft) | 13 | ≈ 1 h 10 min |
+| 10 | 16–21 | ≈ 1 h 25 min |
+| 14 (recommended) | 22 | ≈ 2 h |
+| 20 | 31 | ≈ 2 h 45 min |
+| 32 (maximum detail) | 48 | ≈ 4 h 30 min |
+
+Steps hide in the **F5-TTS inference steps** slider of the TTS tab; the live
+hint under the slider recalculates the cost while you drag it. Cloud (Edge)
+voices ignore the step count — they take about 1–2 s per sentence and no GPU
+time at all.
 
 ---
 

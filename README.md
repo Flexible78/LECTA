@@ -19,6 +19,15 @@
   refresh, and a completion sound that does not block the player from loading the final MP3.
 - **Robustness fixes**: the audio player is guarded against empty and directory paths that raised
   PermissionError, and `is_file()` is checked before a download is offered.
+- **Pause control that reaches the audio itself**: the pause profile now also caps the silence the
+  TTS engine inserts *inside* a phrase (F5-TTS breathing at commas, Edge TTS built-in breaks) and
+  trims hiss tails on a level-relative threshold. On a real 11-minute test file this removed 112 s of
+  dead air (35.9 % → 16 % silence) with no audible loss of speech.
+- **Honest cost model in the UI**: measured seconds per 1000 characters for every F5-TTS step count
+  (RTX 3060 Laptop), so the sliders tell you what a run will cost before you start it.
+- **Petrol UI with built-in help**: one dark-teal design system driven by CSS variables, a sidebar
+  grouped into accordions with hover explanations, a five-step workflow strip, and a `?` help panel
+  (fixed top-right, `F1`) that documents every setting.
 
 ## Stack
 
@@ -64,7 +73,9 @@ See [NOTICE.md](NOTICE.md) for full attribution and licensing notes.
 
 - **Multilingual routing** — automatically detects Russian, English and Hebrew in the same text and sends each segment to the appropriate engine.
 - **Edge cloud voices** — instant generation via Microsoft Edge TTS for all three languages (requires internet; recommended for Hebrew, which has no local backend).
-- **Local backends** — Vosk TTS (56 Russian voices), Silero (Russian + English), F5-TTS (high-quality neural Russian via Misha24-10 and ESpeech models).
+- **Local backends** — Vosk TTS (56 Russian voices), Silero (Russian `v5_6` + English `v3`), F5-TTS (high-quality neural Russian via Misha24-10 and ESpeech models).
+- **Pause control** — profile presets plus a cap on pauses the engine inserts inside a phrase, so long breathing gaps disappear without sounding rushed.
+- **Built-in help** — a `?` panel in the top-right corner (`F1`) explains every voice, slider and trade-off, with a measured time table.
 - **LECTA-branded favicon** — an open book with a sound wave, generated programmatically via `tools/make_favicon.py` (Pillow). Multi-layer ICO (16–256 px) plus 512 px PNG.
 - **FB2 and document parsing** — load FB2, PDF, DOCX, EPUB, RTF, HTML, TXT, Markdown, JSON and CSV. Articles can be fetched directly from a URL.
 - **Vocabulary tab** — extract unique words from a text, translate them via Google Translate, and build a pronunciation dictionary.

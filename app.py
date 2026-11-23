@@ -42,7 +42,10 @@ from libs.russian import normalize_russian
 
 from libs.document_parser import parse_and_save_document
 from libs.web_scraper import scrape_and_save_article
-from libs.ui_assets import custom_css, custom_head, get_upload_progress_html
+from libs.ui_assets import (
+    custom_css, custom_head, get_upload_progress_html,
+    help_overlay_html, workflow_steps_html,
+)
 from libs.thermal import get_gpu_temp
 from libs.project_manager import (
     refresh_data, remove_dataset, remove_all_datasets,
@@ -573,12 +576,14 @@ def rename_project_folder(old_name, new_name):
         return gr.update(), gr.update(), gr.update(visible=False)
 
 tts_models_list = [
-    ('Vosk 0.10 (dev. 56 voices)', 2),
-    ('Silero v5_5 (5 voices)', 3), ('Silero v5_cis (60 voices)', 4),
-    ('Misha24-10 (F5-TTS)', 5), ('ESpeech-TTS (F5-TTS)', 6),
-    ('Silero English v3 (English)', 7),
+    ('ESpeech-TTS (F5-TTS) — best RU/EN quality', 6),
+    ('Misha24-10 (F5-TTS) — lighter Russian voice', 5),
+    ('Silero v5_6 (Russian, 5 voices) — fast', 3),
+    ('Silero v5_cis (60 voices) — many timbres', 4),
+    ('Vosk 0.10 (56 voices) — draft speed', 2),
+    ('Silero English v3 (English only)', 7),
 ]
-accent_models_list = [('RuAccent', 1), ('Silero stress', 2)]
+accent_models_list = [('RuAccent — best stress placement', 1), ('Silero stress — lighter', 2)]
 
 def tts_model_load(ver, progress=gr.Progress()): return synth.load(ver)
 def acc_model_load(ver, progress=gr.Progress()): return accentizer.load(ver)
@@ -622,10 +627,10 @@ div[data-testid="file-name"], span[data-testid="file-name"], .file-name, .file-p
 /* УБИВАЕМ УРОДЛИВЫЕ СКРОЛЛБАРЫ ИЗ ТЕКСТОВЫХ СТАТУСОВ */
 textarea[readonly] { overflow-y: hidden !important; resize: none !important; }
 
-#tts_btn, #batch_tts_btn, #demo_tts_btn, #fb2_gen_btn { background: linear-gradient(135deg, #2096cb 0%, #1a70b0 100%) !important; color: white !important; border: none !important; box-shadow: inset 0px 1px 2px rgba(255, 255, 255, 0.3), 0 4px 10px rgba(32, 150, 203, 0.3) !important; border-radius: 6px !important; }
-#tts_btn:hover, #batch_tts_btn:hover, #demo_tts_btn:hover, #fb2_gen_btn:hover { background: linear-gradient(135deg, #25a8da 0%, #1a70b1 100%) !important; }
-#batch_tts_btn { background: linear-gradient(135deg, #dc762d 0%, #c65e1e 100%) !important; box-shadow: inset 0px 1px 2px rgba(255, 255, 255, 0.3), 0 4px 10px rgba(220, 118, 45, 0.3) !important; }
-#batch_tts_btn:hover { background: linear-gradient(135deg, #e58e49 0%, #dc762d 100%) !important; }
+#tts_btn, #batch_tts_btn, #demo_tts_btn, #fb2_gen_btn { background: linear-gradient(135deg, var(--lecta-accent) 0%, var(--lecta-accent-2) 100%) !important; color: var(--lecta-on-accent) !important; border: none !important; box-shadow: inset 0px 1px 2px rgba(255, 255, 255, 0.28), 0 4px 12px rgba(226, 163, 60, 0.28) !important; border-radius: 9px !important; }
+#tts_btn:hover, #batch_tts_btn:hover, #demo_tts_btn:hover, #fb2_gen_btn:hover { background: linear-gradient(135deg, #efb459 0%, #d9952f 100%) !important; }
+#batch_tts_btn { background: linear-gradient(135deg, #1f8f95 0%, #146a72 100%) !important; color: #eafafa !important; box-shadow: inset 0px 1px 2px rgba(255, 255, 255, 0.22), 0 4px 12px rgba(31, 143, 149, 0.32) !important; }
+#batch_tts_btn:hover { background: linear-gradient(135deg, #26a3a9 0%, #1a7c84 100%) !important; }
 </style>
 <script>
 document.addEventListener('keydown', function(e) {
@@ -649,15 +654,18 @@ with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew")
         "</h1>"
         "<p style='margin:1px 0 0 0; color:#64748b; font-size:11px; line-height:1.3;'>"
         "KATAV writes, LECTA reads. &nbsp;|&nbsp; "
-        "<a href='https://github.com/Flexible78/KATAV' target='_blank' rel='noopener' style='color:#52acde;'>KATAV on GitHub</a>"
+        "<a href='https://github.com/Flexible78/KATAV' target='_blank' rel='noopener' style='color:#4cc9c1;'>KATAV on GitHub</a>"
         "&nbsp;|&nbsp;"
-        "<a href='" + config_module.LECTA_REPO_URL + "' target='_blank' rel='noopener' style='color:#52acde;'>LECTA on GitHub</a>"
+        "<a href='" + config_module.LECTA_REPO_URL + "' target='_blank' rel='noopener' style='color:#4cc9c1;'>LECTA on GitHub</a>"
         "&nbsp;|&nbsp;"
-        "Built on <a href='https://gitverse.ru/diger/fb2tts' target='_blank' rel='noopener' style='color:#64748b;'>fb2tts</a> by diger"
+        "Built on <a href='https://gitverse.ru/diger/fb2tts' target='_blank' rel='noopener' style='color:#6f9295;'>fb2tts</a> by diger"
         "</p>"
         "</div>",
         elem_id="lecta-header"
     )
+
+    # Floating “?” button (top right) + full reference overlay.
+    gr.HTML(help_overlay_html(), elem_id="lecta-help")
     
     tts_state = gr.State()
     acc_state = gr.State()
@@ -666,75 +674,106 @@ with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew")
     # ── GPU temperature: auto-refresh every 5 seconds via gr.Timer ──
     gpu_temp_timer = gr.Timer(5, active=True)
     
-    with gr.Sidebar(open=False):
-        tts_sel = gr.Dropdown(value='', allow_custom_value=True, label='Select TTS model', choices=tts_models_list, interactive=True)
-        tts_status = gr.Textbox(show_label=False, visible=True, lines=1)
-        acc_sel = gr.Dropdown(value='', allow_custom_value=True, label='Stress placement', choices=accent_models_list, interactive=True)
-        acc_status = gr.Textbox(show_label=False, visible=True, lines=1)
-
-        gr.Markdown("---")
-        with gr.Row():
-            device_radio = gr.Radio(
-                choices=["auto", "cpu"],
-                value="auto",
-                label="🖥 Compute device",
-                info="auto = GPU (fast, 6GB VRAM) | cpu = RAM (slower, but does not load the GPU)",
-                interactive=True
+    with gr.Sidebar(open=True):
+        with gr.Accordion("🎙 Voice & language", open=True):
+            tts_sel = gr.Dropdown(
+                value='', allow_custom_value=True, label='Select TTS model',
+                choices=tts_models_list, interactive=True,
+                info="ESpeech-TTS = best Russian/English quality · Silero = ~10× faster · "
+                     "Vosk = draft only · Edge flags (below) = instant cloud voice",
             )
-        
-        with gr.Row():
-            eco_btn = gr.Button("♻ ECO (quiet / cool)", size="sm", elem_id="eco_btn",
-                variant="secondary")
-        
-        gr.Markdown("---")
-        gpu_temp_display = gr.HTML(value="<div style='padding:8px 12px; border-radius:8px; background:#1e293b; border:1px solid #334155; text-align:center;'><span style='color:#94a3b8; font-size:13px;'>GPU: checking...</span></div>", elem_id="gpu_temp_display")
-        
-        gr.Markdown("---")
-        with gr.Row():
-            preview_voice_btn = gr.Button("▶ Preview voice", size="sm", elem_id="preview_voice_btn")
-        preview_audio = gr.Audio(label="Voice preview", type="filepath", interactive=False, autoplay=True, visible=False)
-        preview_status = gr.Markdown("")
-        
-        gr.Markdown("---")
-        fast_ru_cb = gr.Checkbox(label="⚡ Russian via cloud (Edge TTS)", value=router.USE_EDGE_FOR_RUSSIAN, info="Instant speed! Requires internet. Voice: Dmitry")
-        fast_eng_cb = gr.Checkbox(label="⚡ English via cloud", value=router.USE_EDGE_FOR_ENGLISH, info="Fast generation via Microsoft Edge")
-        
-        # ДОБАВЛЕН ИВРИТ ЧЕРЕЗ ОБЛАКО
-        fast_heb_cb = gr.Checkbox(label="⚡ Hebrew via cloud", value=router.USE_EDGE_FOR_HEBREW, info="Microsoft Edge TTS (recommended — local TTS does not support Hebrew)")
-        
-        dict_mode_cb = gr.Checkbox(label="📚 Dictionary mode (long pauses)", value=router.DICTIONARY_MODE, info="1 sec breath between languages")
-        
-        gr.Markdown("✂️ Audio pauses — applies to foreground and background generation")
-        with gr.Row():
+            tts_status = gr.Textbox(show_label=False, visible=True, lines=1)
+            acc_sel = gr.Dropdown(
+                value='', allow_custom_value=True, label='Stress placement',
+                choices=accent_models_list, interactive=True,
+                info="Places Russian stress marks so 'замо́к' and 'за́мок' are read correctly. "
+                     "RuAccent = best quality, Silero stress = lighter (CPU friendly)",
+            )
+            acc_status = gr.Textbox(show_label=False, visible=True, lines=1)
+            with gr.Row():
+                preview_voice_btn = gr.Button("▶ Preview voice", size="sm", elem_id="preview_voice_btn")
+            preview_audio = gr.Audio(label="Voice preview", type="filepath", interactive=False, autoplay=True, visible=False)
+            preview_status = gr.Markdown("")
+
+        with gr.Accordion("🌍 Language routing", open=False):
+            fast_ru_cb = gr.Checkbox(
+                label="⚡ Russian via cloud (Edge TTS)",
+                value=router.USE_EDGE_FOR_RUSSIAN,
+                info="Voice Dmitry. ~1–2 s per sentence and no GPU load, but needs internet "
+                     "and sends the text to Microsoft",
+            )
+            fast_eng_cb = gr.Checkbox(
+                label="⚡ English via cloud",
+                value=router.USE_EDGE_FOR_ENGLISH,
+                info="Voice Christopher. Much faster than a local English model",
+            )
+            fast_heb_cb = gr.Checkbox(
+                label="⚡ Hebrew via cloud",
+                value=router.USE_EDGE_FOR_HEBREW,
+                info="Required for Hebrew — the local models do not support it",
+            )
+            dict_mode_cb = gr.Checkbox(
+                label="📚 Dictionary mode (long pauses)",
+                value=router.DICTIONARY_MODE,
+                info="Adds a long breath (0.9–1.5 s) between languages — for vocabulary lists, "
+                     "not for books",
+            )
+
+        with gr.Accordion("✂️ Pauses", open=True):
+            gr.Markdown(
+                "Gaps between fragments **and** the engine's own pauses at commas. "
+                "<span class='lecta-tip' data-tip='Паузы применяются и к обычной, и к фоновой озвучке. "
+                "Профиль задаёт все значения сразу; ползунки ниже его переопределяют.'>i</span>"
+            )
             gen_preset_sel = gr.Radio(
-                choices=["compact", "natural", "learning"],
+                choices=[("compact", "compact"), ("natural", "natural"), ("learning", "learning")],
                 value=getattr(saved, "generation_preset", "compact"),
                 label="Pause profile",
-                info="compact = tight narration (default) · natural = more air · learning = long study pauses",
+                info="compact: phrase 0.25 s · sentence 0.28 s · paragraph 0.45 s | "
+                     "natural: 0.40 / 0.38 / 0.60 s | learning: 0.70 / 0.65 / 0.95 s",
             )
-        with gr.Row():
-            overlap_slider = gr.Slider(
-                0.0, 0.5, value=router.PAUSE_LANGUAGE_MS / 1000.0, step=0.01,
-                label="Language-switch gap (s)",
-                info="Neutral pause between RU / EN / HE fragments. Speech is never cross-faded.",
-            )
-            pad_slider = gr.Slider(
-                0.0, 0.12, value=router.EDGE_TRIM_MS / 1000.0, step=0.005,
-                label="Edge trim pad (s)",
-                info="Silence kept around each synthesized fragment. 0.03 keeps quiet consonants.",
-            )
-            fade_slider = gr.Slider(
-                0.0, 0.05, value=router.MICRO_FADE_MS / 1000.0, step=0.002,
-                label="Anti-click fade (s)",
-                info="Micro fade at cut points only; it does not overlap speech.",
-            )
-        with gr.Row():
             internal_slider = gr.Slider(
                 0.1, 1.2, value=router.PAUSE_INTERNAL_MS / 1000.0, step=0.01,
                 label="Max pause inside a phrase (s)",
-                info="The TTS model breathes on its own at commas and full stops. "
-                     "Anything longer than this is shortened. 0.25 = tight narration.",
+                info="The model breathes at every comma. 0.15–0.25 s = tight narration, "
+                     "0.5 s = story-telling. Anything longer is cut automatically",
             )
+            with gr.Row():
+                overlap_slider = gr.Slider(
+                    0.0, 0.5, value=router.PAUSE_LANGUAGE_MS / 1000.0, step=0.01,
+                    label="Language-switch gap (s)",
+                    info="Pause between RU / EN / HE fragments; speech is never cross-faded",
+                )
+                pad_slider = gr.Slider(
+                    0.0, 0.12, value=router.EDGE_TRIM_MS / 1000.0, step=0.005,
+                    label="Edge trim pad (s)",
+                    info="Silence kept around each fragment. 0.03 s protects quiet consonants; "
+                         "0 clips them",
+                )
+                fade_slider = gr.Slider(
+                    0.0, 0.05, value=router.MICRO_FADE_MS / 1000.0, step=0.002,
+                    label="Anti-click fade (s)",
+                    info="Micro fade at cut points only — never over speech",
+                )
+
+        with gr.Accordion("🖥 Performance & GPU", open=False):
+            device_radio = gr.Radio(
+                choices=["auto", "cpu"],
+                value="auto",
+                label="Compute device",
+                info="auto = GPU (fast, needs ~6 GB VRAM) · cpu = RAM (10–50× slower, "
+                     "but the GPU stays free)",
+                interactive=True
+            )
+            with gr.Row():
+                eco_btn = gr.Button("♻ ECO (quiet / cool)", size="sm", elem_id="eco_btn",
+                    variant="secondary")
+            gr.Markdown(
+                "ECO = 2 workers, 15 s cooldown, thermal limit 78 °C "
+                "<span class='lecta-tip' data-tip='Включите на ноутбуке, если корпус греется: "
+                "нагрев падает, озвучка идёт медленнее.'>i</span>"
+            )
+            gpu_temp_display = gr.HTML(value="<div style='padding:8px 12px; border-radius:9px; background:var(--lecta-surface-2); border:1px solid var(--lecta-border); text-align:center;'><span style='color:var(--lecta-text-dim); font-size:13px;'>GPU: checking...</span></div>", elem_id="gpu_temp_display")
 
         gr.Markdown("---")
         with gr.Row():
@@ -749,6 +788,7 @@ with gr.Blocks(title="LECTA — Text-to-Speech for Russian, English and Hebrew")
 
     with gr.Tabs() as project_tabs:
         with gr.Tab("📁 Project Manager", id="fb2tts") as fb2tts_tab:
+            gr.HTML(workflow_steps_html(1), elem_id="lecta-steps")
             with gr.Row(visible=False): remove_ru_cb = gr.Checkbox(label="Remove Russian text", value=False)
             
             with gr.Row(elem_classes=["uniform-row"]):
@@ -1239,8 +1279,8 @@ if __name__ == "__main__":
         "css": custom_css,
         "head": custom_head,
         "theme": gr.themes.Soft(
-            primary_hue="sky",
-            neutral_hue="slate",
+            primary_hue="amber",
+            neutral_hue="zinc",
             radius_size=gr.themes.sizes.radius_lg,
             spacing_size=gr.themes.sizes.spacing_md,
             font=[gr.themes.GoogleFont("Inter"), "ui-sans-serif", "system-ui", "sans-serif"],
